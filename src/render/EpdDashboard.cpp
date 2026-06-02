@@ -1,5 +1,4 @@
 #include "render/EpdDashboard.h"
-#include "render/Pages.h"      // renderMessage for the no-data case
 #include "core/Format.h"       // formatPln(float, char[8])
 #include <cstdio>
 #include <cstring>
@@ -95,7 +94,7 @@ void drawDashboard(IRenderer& r, const PriceView& v, const EpdStatus& st) {
   r.clear(p.bg);
   const int W = r.width();
 
-  if (!v.hasData) { renderMessage(r, "Brak danych", st.clockHHMM); return; }
+  if (!v.hasData) { drawMessage(r, "Brak danych", st.clockHHMM); return; }
 
   // --- status bar ---
   char status[64];

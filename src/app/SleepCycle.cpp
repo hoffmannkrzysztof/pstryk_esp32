@@ -12,6 +12,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
+#include "driver/rtc_io.h"
 #include <sys/time.h>
 #include <cstdio>
 #include <cstring>
@@ -80,6 +81,14 @@ void SleepCycle::rtcWrite(time_t epoch) {
 }
 
 void SleepCycle::sleepFor(uint32_t seconds) {
+  // Wait (bounded) for the button to be released, so a still-pressed button does
+  // not immediately re-trigger the level-sensitive ext0 wake.
+  uint32_t t0 = millis();
+  while (digitalRead(PIN_BTN) == LOW && millis() - t0 < 5000) delay(10);
+  // Retain the pull-up on the wake pin through deep sleep (RTC domain) so a
+  // floating GPIO cannot spuriously wake the board.
+  rtc_gpio_pullup_en((gpio_num_t)PIN_BTN);
+  rtc_gpio_pulldown_dis((gpio_num_t)PIN_BTN);
   esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN, 0);  // button (active low) wake
   esp_deep_sleep_start();
@@ -93,6 +102,9 @@ void SleepCycle::setup() {
   Wire.begin(I2C_SDA, I2C_SCL);
   if (!gfx_.begin()) { sleepFor(3600); return; }
 
+  // Wake cause is intentionally not branched: a button (ext0) wake falls through
+  // to a normal fetch+repaint (= short-press "refresh now"); a held button is
+  // caught by buttonHeld() below and opens the captive portal.
   // 1) reconfigure if button held at boot, or if no saved config
   settings_.load();
   if (buttonHeld(3000) || !settings_.isComplete()) {
@@ -143,10 +155,9 @@ void SleepCycle::setup() {
     FetchResult res = client.fetch(w.start, w.end, data);
     if (res.status == FetchStatus::Ok) {
       view = buildView(data, now);
-      char clk[6]; std::snprintf(clk, sizeof(clk), "%02d:%02d", localHour(now),
-                                 (int)((now % 3600) / 60));
-      static char clkbuf[6]; std::memcpy(clkbuf, clk, sizeof(clkbuf));
-      st.clockHHMM = clkbuf;
+      struct tm lt; localtime_r(&now, &lt);
+      char clk[6]; std::snprintf(clk, sizeof(clk), "%02d:%02d", lt.tm_hour, lt.tm_min);
+      st.clockHHMM = clk;                       // local buffer lives until setup() returns
       drawDashboard(gfx_, view, st);            // 7) paint
       nextWake = secondsUntilNextWake(now, view.hasTomorrow);
     } else if (res.status == FetchStatus::AuthError) {
@@ -156,8 +167,8 @@ void SleepCycle::setup() {
       drawMessage(gfx_, "Limit zapytan", "Sprobuje pozniej");
       nextWake = res.retryAfterSec > 0 ? (uint32_t)res.retryAfterSec : 1200;
     } else {
-      char l2[24]; std::snprintf(l2, sizeof(l2), "%02d:%02d", localHour(now),
-                                 (int)((now % 3600) / 60));
+      struct tm lt; localtime_r(&now, &lt);
+      char l2[24]; std::snprintf(l2, sizeof(l2), "%02d:%02d", lt.tm_hour, lt.tm_min);
       drawMessage(gfx_, "Blad pobierania", l2);
       nextWake = 300;
     }
