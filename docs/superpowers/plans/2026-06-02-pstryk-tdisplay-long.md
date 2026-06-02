@@ -121,6 +121,7 @@ lib_deps =
 platform = native
 test_framework = unity
 build_src_filter = +<core/> +<view/>
+test_build_src = yes
 build_flags =
     -std=gnu++17
     -I src
@@ -243,8 +244,8 @@ void test_two_decimals_comma() {
 
 void test_rounds() {
   char b[8];
-  pstryk::formatPln(1.125f, b);
-  TEST_ASSERT_EQUAL_STRING("1,13", b);  // round half up via printf
+  pstryk::formatPln(1.128f, b);
+  TEST_ASSERT_EQUAL_STRING("1,13", b);  // rounds up (not a half-way tie; printf uses round-half-to-even)
 }
 
 void test_integerish() {
