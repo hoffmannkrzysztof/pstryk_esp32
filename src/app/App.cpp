@@ -12,6 +12,7 @@ namespace pstryk {
 static const uint32_t kRotateMs = 7000;
 static const uint32_t kRedrawMs = 1000;
 static const uint32_t kStaleSec = 90 * 60;
+static const time_t   kTimeValid = 1700000000;  // sanity threshold for a synced clock
 
 // Pages in rotation order; Jutro is skipped unless tomorrow is held.
 static const Page kPages[] = {Page::Teraz, Page::Chart, Page::Extremes, Page::Jutro};
@@ -34,7 +35,7 @@ void App::setup() {
   renderMessage(gfx_, "Czas", "Synchronizacja...");
   configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.google.com");
   timeServiceBegin();
-  for (int i = 0; i < 40 && time(nullptr) < 1700000000; ++i) delay(250);
+  for (int i = 0; i < 40 && time(nullptr) < kTimeValid; ++i) delay(250);
 
   doFetch();
   uint32_t now = millis();
@@ -44,6 +45,10 @@ void App::setup() {
 
 void App::doFetch() {
   time_t now = time(nullptr);
+  if (now < kTimeValid) {                 // clock not synced yet
+    nextFetchAtMs_ = millis() + 2000;     // recheck soon; redraw() shows the sync screen
+    return;
+  }
   Window w = computeWindow(now);
   PstrykClient client(settings_.apiKey);
   PriceData fresh;
@@ -54,16 +59,18 @@ void App::doFetch() {
     view_ = buildView(data_, now);
     haveData_ = view_.hasData;
     lastFetchOk_ = now;
+    authError_ = false;
     nextFetchAtMs_ = millis() + nextRefreshMs(now, view_.hasTomorrow);
   } else if (res.status == FetchStatus::AuthError) {
-    renderMessage(gfx_, "Blad klucza API", "Przytrzymaj BOOT, aby zmienic");
-    delay(4000);
-    nextFetchAtMs_ = millis() + 60u * 1000u;  // retry in a minute
+    authError_ = true;                     // sticky; redraw() shows the error screen
+    nextFetchAtMs_ = millis() + 5u * 60u * 1000u;   // recheck in 5 min
   } else {
-    // Rate-limited / network / parse: keep last data, back off.
-    uint32_t backoff = (res.status == FetchStatus::RateLimited && res.retryAfterSec > 0)
-                         ? (uint32_t)res.retryAfterSec * 1000u
-                         : 60u * 1000u;
+    uint32_t backoff;
+    if (res.status == FetchStatus::RateLimited)
+      backoff = res.retryAfterSec > 0 ? (uint32_t)res.retryAfterSec * 1000u
+                                      : 20u * 60u * 1000u;  // cap-safe default (<=3/hr)
+    else
+      backoff = 60u * 1000u;               // network/parse error
     nextFetchAtMs_ = millis() + backoff;
   }
 }
@@ -76,13 +83,17 @@ void App::advancePage() {
 }
 
 void App::redraw() {
-  bool stale = haveData_ && lastFetchOk_ > 0 &&
-               (time(nullptr) - lastFetchOk_) > (time_t)kStaleSec;
-  char clock[6] = "";
   time_t now = time(nullptr);
-  if (now > 1700000000) std::snprintf(clock, sizeof(clock), "%02d:%02d", localHour(now),
-                                      (int)((now % 3600) / 60));
-  // Count pages currently in rotation (Jutro optional).
+  if (now < kTimeValid) { renderMessage(gfx_, "Czas", "Synchronizacja..."); return; }
+  if (authError_) {
+    renderMessage(gfx_, "Blad klucza API", "Przytrzymaj BOOT, aby zmienic");
+    return;
+  }
+  bool stale = haveData_ && lastFetchOk_ > 0 &&
+               (now - lastFetchOk_) > (time_t)kStaleSec;
+  char clock[6];
+  std::snprintf(clock, sizeof(clock), "%02d:%02d", localHour(now),
+                (int)((now % 3600) / 60));
   int dotCount = view_.hasTomorrow ? 4 : 3;
   int dotIdx = pageIdx_ < dotCount ? pageIdx_ : dotCount - 1;
   renderPage(gfx_, kPages[pageIdx_], view_, stale, clock, dotIdx, dotCount);

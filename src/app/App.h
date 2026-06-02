@@ -26,6 +26,7 @@ class App {
   PriceView       view_;
 
   bool     haveData_ = false;
+  bool     authError_ = false;   // sticky: shows the API-key error screen until next OK fetch
   time_t   lastFetchOk_ = 0;     // UTC epoch of last successful fetch
   uint32_t nextFetchAtMs_ = 0;
   uint32_t nextRotateAtMs_ = 0;
