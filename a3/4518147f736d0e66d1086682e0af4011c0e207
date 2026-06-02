@@ -1,0 +1,28 @@
+src/core/TimeService.cpp
+  3694524a809b7b23 1-55
+src/core/TimeService.h
+  3694524a809b7b23 1-17
+test/test_time/test_time.cpp
+  3694524a809b7b23 1-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "a34518147f736d0e66d1086682e0af4011c0e207",
+  "prompts": {
+    "3694524a809b7b23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "934e0760-5f7b-427f-a103-ca1f6c954f7b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 121,
+      "total_deletions": 0,
+      "accepted_lines": 121,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/988484ea138801e1d99ac93c8a5c844c2321cce1acf4ce6f8b80e91bf860b384"
+    }
+  }
+}
