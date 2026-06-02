@@ -1,0 +1,24 @@
+docs/superpowers/plans/2026-06-02-pstryk-tdisplay-long.md
+  3694524a809b7b23 124,247-248
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "703c0046eac5a3f78cd28054c0a74a2f06d67ed4",
+  "prompts": {
+    "3694524a809b7b23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "934e0760-5f7b-427f-a103-ca1f6c954f7b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/7fcdeb00f20018379e3d22799c35e04acbaf5381e90b2ff2490ecf53cde8181d"
+    }
+  }
+}
