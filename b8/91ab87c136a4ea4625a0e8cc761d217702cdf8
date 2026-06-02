@@ -1,0 +1,26 @@
+src/net/PstrykClient.h
+  3694524a809b7b23 1-25
+src/net/PstrykClient.cpp
+  3694524a809b7b23 1-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "b891ab87c136a4ea4625a0e8cc761d217702cdf8",
+  "prompts": {
+    "3694524a809b7b23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "934e0760-5f7b-427f-a103-ca1f6c954f7b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 88,
+      "total_deletions": 0,
+      "accepted_lines": 88,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/0eb7f3c40e786beecd01cbba8ba6bb6887beac99abde2c09b2d3d94c15545bae"
+    }
+  }
+}
