@@ -1,6 +1,6 @@
 {
   "build": {
-    "arduino": { "partitions": "huge_app.csv" },
+    "arduino": { "partitions": "huge_app.csv", "memory_type": "qio_opi" },
     "core": "esp32",
     "extra_flags": [
       "-DARDUINO_USB_MODE=1",
