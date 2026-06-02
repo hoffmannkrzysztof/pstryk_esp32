@@ -8,12 +8,20 @@ namespace pstryk {
 static String urlEncodeIso(const char* iso) {
   // Only ':' needs encoding in our ISO8601 strings.
   String s;
-  for (const char* p = iso; *p; ++p) s += (*p == ':') ? String("%3A") : String(*p);
+  s.reserve(26);  // 20-char ISO + up to 3 colons expanded to %3A
+  for (const char* p = iso; *p; ++p) {
+    if (*p == ':') s += F("%3A");
+    else           s += *p;      // char overload, no heap alloc
+  }
   return s;
 }
 
 FetchResult PstrykClient::fetch(const char* startIso, const char* endIso, PriceData& out) {
   FetchResult r;
+  if (!startIso || !endIso) {
+    r.status = FetchStatus::NetworkError;
+    return r;
+  }
   String url =
       "https://api.pstryk.pl/integrations/meter-data/unified-metrics/"
       "?metrics=pricing&resolution=hour&window_start=" + urlEncodeIso(startIso) +
@@ -39,6 +47,7 @@ FetchResult PstrykClient::fetch(const char* startIso, const char* endIso, PriceD
 
   if (code == 200) {
     String body = https.getString();
+    if (body.isEmpty()) log_e("PstrykClient: empty body (OOM or zero-length response)");
     https.end();
     if (parsePricing(body.c_str(), out)) {
       r.status = FetchStatus::Ok;
