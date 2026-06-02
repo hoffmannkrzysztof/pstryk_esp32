@@ -16,4 +16,13 @@ uint32_t nextRefreshMs(time_t now, bool hasTomorrow) {
   return 30u * 60u * 1000u;
 }
 
+uint32_t secondsUntilNextWake(time_t now, bool hasTomorrow) {
+  long secsIntoHour = (long)(now % 3600);
+  uint32_t toTop = (uint32_t)(3600 - secsIntoHour);  // 1..3600
+  uint32_t wake = toTop + 5u;                         // small guard past the turn
+  int h = localHour(now);
+  if (h >= 12 && h < 16 && !hasTomorrow && wake > 30u * 60u) wake = 30u * 60u;
+  return wake;
+}
+
 }  // namespace pstryk
