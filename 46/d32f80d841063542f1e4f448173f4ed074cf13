@@ -1,0 +1,26 @@
+src/net/WiFiProvisioner.cpp
+  3694524a809b7b23 1-35
+src/net/WiFiProvisioner.h
+  3694524a809b7b23 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "46d32f80d841063542f1e4f448173f4ed074cf13",
+  "prompts": {
+    "3694524a809b7b23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "934e0760-5f7b-427f-a103-ca1f6c954f7b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 50,
+      "total_deletions": 0,
+      "accepted_lines": 50,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/6b7b01bb64bc1d26d409ba6025976ac4f5c9f5b7efe1d9fa7c4edcfb276359d0"
+    }
+  }
+}
