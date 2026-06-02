@@ -153,4 +153,12 @@ void drawDashboard(IRenderer& r, const PriceView& v, const EpdStatus& st) {
   r.present();
 }
 
+void drawMessage(IRenderer& r, const char* line1, const char* line2) {
+  Pal p(r);
+  r.clear(p.bg);
+  r.text(40, 200, line1, p.ink, 1);
+  if (line2 && line2[0]) r.text(40, 250, line2, p.mid, 1);
+  r.present();
+}
+
 }  // namespace pstryk
