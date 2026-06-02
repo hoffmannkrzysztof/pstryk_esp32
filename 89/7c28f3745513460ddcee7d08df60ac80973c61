@@ -1,0 +1,46 @@
+src/core/PriceLogic.cpp
+  a2abcf1119e0e2d5 64-67
+src/render/LongRenderer.cpp
+  64ca57c5fa609e36 51-55,60,67-72
+test/fixtures.h
+  a2abcf1119e0e2d5 2-6,10-15,24-25
+test/test_parse/test_parse.cpp
+  a2abcf1119e0e2d5 22
+src/core/PstrykParse.cpp
+  a2abcf1119e0e2d5 17-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "897c28f3745513460ddcee7d08df60ac80973c61",
+  "prompts": {
+    "64ca57c5fa609e36": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a803619-f749-4c6f-96cd-3f824e392571",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 12,
+      "total_deletions": 3,
+      "accepted_lines": 12,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/f6612eefea317f7f529169f8344cdcf39e6c57726d644a0f74febaeffe1098dc"
+    },
+    "a2abcf1119e0e2d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "84c1bc50-9c7a-46bc-a860-07b07bd8c27b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 36,
+      "total_deletions": 17,
+      "accepted_lines": 28,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/8420226ae06a5de96d67ec70ba821fb815395dd0fd1339cb2d6abd36a3c9b47e"
+    }
+  }
+}
