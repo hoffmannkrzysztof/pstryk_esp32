@@ -69,8 +69,19 @@ void drawChart(IRenderer& r, const Pal& p, const std::vector<Bar>& bars,
     uint16_t c = (bars[i].price >= avg) ? p.dark : p.light;
     r.fillRect(bx, by, bw, bh, c);
     if (i == liveIdx) r.drawRect(bx - 1, by - 1, bw + 2, bh + 2, p.ink);
-    if (i == minI) r.text(bx - 2, by - 14, "v", p.ink, 1);
-    if (i == maxI) r.text(bx - 2, by - 14, "^", p.ink, 1);
+    if (i == minI || i == maxI) {
+      // Tag the cheapest/priciest hour with arrow + hour + price (design 4.2).
+      char price[8]; formatPln(bars[i].price, price);
+      char label[24];
+      std::snprintf(label, sizeof(label), "%s %02d:00 %s",
+                    (i == minI) ? "v" : "^", bars[i].hour, price);
+      int lw = r.textWidth(label, 1);
+      int lx = bx - 2;
+      if (lx < x) lx = x;                       // clamp to chart left edge
+      if (lx > x + w - lw) lx = x + w - lw;     // clamp to chart right edge
+      if (lx < x) lx = x;                       // label wider than chart: pin left
+      r.text(lx, by - 14, label, p.ink, 1);
+    }
   }
   // dashed average line
   int ay = y + h - (int)((avg / top) * h);

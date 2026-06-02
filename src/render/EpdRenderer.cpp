@@ -58,9 +58,19 @@ void EpdRenderer::drawLine(int x0, int y0, int x1, int y1, uint16_t c) {
   epd_draw_line(x0, y0, x1, y1, (uint8_t)(c & 0xFF), fb_);
 }
 
-void EpdRenderer::text(int x, int y, const char* s, uint16_t /*color*/, int /*size*/) {
+void EpdRenderer::text(int x, int y, const char* s, uint16_t color, int /*size*/) {
   int32_t cx = x, cy = y + textHeight(1);
-  write_string((const GFXfont*)&FiraSans, s, &cx, &cy, fb_);
+  // Map our 8-bit luminance (0=black..255=white, from EpdRenderer::rgb) to the
+  // driver's 4-bit grayscale foreground. Keep the background white and do NOT
+  // request DRAW_BACKGROUND, so text composites onto the existing framebuffer
+  // without an opaque box. write_mode (vs write_string) is the only path that
+  // accepts a per-call FontProperties for the foreground color.
+  FontProperties props = {};
+  props.fg_color = (uint8_t)((color & 0xFF) >> 4);
+  props.bg_color = 15;       // white
+  props.fallback_glyph = 0;
+  props.flags = 0;           // no DRAW_BACKGROUND -> transparent background
+  write_mode((const GFXfont*)&FiraSans, s, &cx, &cy, fb_, BLACK_ON_WHITE, &props);
 }
 
 int EpdRenderer::textWidth(const char* s, int /*size*/) {
