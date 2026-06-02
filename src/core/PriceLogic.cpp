@@ -61,6 +61,10 @@ PriceView buildView(const PriceData& data, time_t now) {
     }
   }
   if (cur >= 0 && cur < (int)v.today.size()) {
+    // The API does not flag a live hour, so reflect the clock-derived current
+    // hour here: drives liveIndex and the chart's live-bar ring.
+    v.liveIndex = cur;
+    v.today[cur].isLive = true;
     v.currentBuy = v.today[cur].price;
     v.currentHour = v.today[cur].hour;
     v.currentBelowAvg = v.currentBuy <= v.todayAvg;

@@ -48,19 +48,28 @@ bool LongRenderer::begin() {
       TFT_QSPI_D3    // quadhd/D3 = 14
   );
 
-  // rotation=1 => landscape 640x180; ips=false per LilyGo example.
+  // This panel's AXS15231B does NOT support hardware landscape rotation
+  // correctly: rotation=1 tiles/garbles the image (confirmed on hardware),
+  // and LilyGo's own examples always drive it at rotation 0. So the PANEL
+  // stays native portrait (rotation 0, 180x640) and we obtain the landscape
+  // 640x180 surface from the canvas's SOFTWARE rotation below.
   // Explicit w=180, h=640 required — library default is 360x640.
   panel_ = new Arduino_AXS15231B(
       bus_,
       TFT_QSPI_RST,    // rst = 16
-      /*rotation=*/1,
+      /*rotation=*/0,
       /*ips=*/false,
       /*w=*/PANEL_NATIVE_W,   // 180
       /*h=*/PANEL_NATIVE_H    // 640
   );
 
   // Off-screen canvas (uses PSRAM) -> flush to panel; avoids flicker.
-  canvas_ = new Arduino_Canvas(SCREEN_W, SCREEN_H, panel_);
+  // Constructed in the panel's NATIVE 180x640 layout with software rotation=1,
+  // so drawing happens in a 640x180 landscape surface while the framebuffer is
+  // stored native and flushed 1:1 to the rotation-0 panel. (If the result is
+  // upside-down, change this rotation to 3.)
+  canvas_ = new Arduino_Canvas(PANEL_NATIVE_W, PANEL_NATIVE_H, panel_,
+                               /*output_x=*/0, /*output_y=*/0, /*rotation=*/1);
 
   // GFX_SKIP_OUTPUT_BEGIN (-2): initialise canvas memory without calling
   // panel_->begin() inside canvas_->begin(), so we can call it separately

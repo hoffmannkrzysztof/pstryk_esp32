@@ -14,12 +14,16 @@ bool parsePricing(const char* json, PriceData& out) {
   out.frames.clear();
   for (JsonObject fr : frames) {
     PriceFrame f;
-    f.start       = parseIso8601Utc(fr["start"] | "");
-    f.buy         = fr["price_gross"]          | 0.0f;
-    f.sell        = fr["price_prosumer_gross"] | 0.0f;
-    f.isLive      = fr["is_live"]      | false;
-    f.isCheap     = fr["is_cheap"]     | false;
-    f.isExpensive = fr["is_expensive"] | false;
+    f.start = parseIso8601Utc(fr["start"] | "");
+    // Price fields are nested under frames[].metrics.pricing.* (not flat on the
+    // frame). A missing object yields a null JsonObject, so the | defaults hold.
+    JsonObjectConst p = fr["metrics"]["pricing"];
+    f.buy         = p["price_gross"]          | 0.0f;
+    f.sell        = p["price_prosumer_gross"] | 0.0f;
+    f.isCheap     = p["is_cheap"]     | false;
+    f.isExpensive = p["is_expensive"] | false;
+    // The API does not emit `is_live`; the current frame is derived from the
+    // clock in PriceLogic::buildView, so isLive stays false here.
     out.frames.push_back(f);
   }
   return true;

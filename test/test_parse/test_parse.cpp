@@ -19,9 +19,9 @@ void test_maps_fields() {
   parsePricing(kPricingJson, d);
   const PriceFrame& f = d.frames[1];
   TEST_ASSERT_EQUAL(parseIso8601Utc("2026-06-02T07:00:00Z"), f.start);
+  // buy/sell live under frames[].metrics.pricing.* in the real API.
   TEST_ASSERT_FLOAT_WITHIN(0.001, 0.52f, f.buy);
   TEST_ASSERT_FLOAT_WITHIN(0.001, 0.31f, f.sell);
-  TEST_ASSERT_TRUE(f.isLive);
 }
 
 void test_flags_default_false() {
