@@ -1,0 +1,26 @@
+src/render/EpdRenderer.cpp
+  3b83f6f6afa176f8 6-7,62-71,73-74,77,79-80,83-84,86,89-90
+src/render/EpdDashboard.cpp
+  3b83f6f6afa176f8 14-15,32,38,52-53,56-59,63,73-81,88-90,94-95,99-100,102-110,113-116,118-121,123-124,126-128,131,133,135-136,138-158,166-170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "66ea96f5b000432d3d97c08ea5e7bfa994969940",
+  "prompts": {
+    "3b83f6f6afa176f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2fc1bc3a-a48f-4ef6-b420-276e26b12abd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 7363,
+      "total_deletions": 5324,
+      "accepted_lines": 2122,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/e03da67996e00e899662f52e1d6435a58c3b2f8ce59641c08c9ff9858c078237"
+    }
+  }
+}
