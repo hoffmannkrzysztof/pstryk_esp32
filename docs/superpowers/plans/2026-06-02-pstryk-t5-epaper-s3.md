@@ -333,12 +333,13 @@ build_flags =
 build_src_filter =
     +<*>
     -<render/LongRenderer.cpp>
-    -<render/Pages.cpp>
     -<app/App.cpp>
 lib_deps =
     bblanchon/ArduinoJson@^7.2.0
     tzapu/WiFiManager@^2.0.17
 ```
+
+> Note: `render/Pages.cpp` is intentionally **kept** in the e-paper env (not excluded) because `renderMessage()` lives there and `SleepCycle`/`EpdDashboard` reuse it; `Pages.cpp` depends only on `IRenderer`, so it compiles cleanly for this board. Only `render/LongRenderer.cpp` and `app/App.cpp` are LCD-specific and excluded.
 
 - [ ] **Step 5: Create `src/render/EpdRenderer.h`**:
 
