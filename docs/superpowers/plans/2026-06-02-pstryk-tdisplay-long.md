@@ -2020,10 +2020,11 @@ git commit --allow-empty -m "test: on-device smoke test passed (T-Display-S3-Lon
 
 ## Notes for the implementer
 
-- **Library API drift:** `Arduino_GFX_Library.h` exposes `Arduino_ESP32QSPI`, `Arduino_AXS15231`, and `Arduino_Canvas`. If class names differ in 1.3.7, check the bundled examples in `Xinyuan-LilyGO/T-Display-S3-Long/examples/GFX_AXS15231B_Image/`. Keep QSPI ≤ 32 MHz.
+- **Library API drift (resolved during implementation):** `1.3.7` does not compile against ESP32 Arduino core 3.3.8 / IDF 5.x, so the pin was relaxed to `^1.3.7` → **1.6.5**. In 1.6.5 the panel class is **`Arduino_AXS15231B`** (trailing B) and its constructor needs an explicit width (`PANEL_NATIVE_W=180`; the default is 360). `Arduino_ESP32QSPI(cs,sck,d0,d1,d2,d3)` maps the four data pins to (mosi,miso,quadwp,quadhd). `setUTF8Print()` is unavailable (guarded by `U8G2_FONT_SUPPORT`) and was dropped. Keep QSPI ≤ 32 MHz. See `src/render/LongRenderer.cpp` header comments.
 - **Orientation:** if the panel renders portrait/mirrored, adjust the `rotation` argument (0/1/2/3) in `LongRenderer::begin`.
 - **Canvas memory:** 640×180×2 = ~230 KB — requires PSRAM (already enabled via `-DBOARD_HAS_PSRAM`). If `canvas_->begin()` fails, confirm PSRAM init in the boot log.
-- **Auth fallback:** if live fetches return 401 with a known-good key, try `addHeader("Authorization", "Bearer " + apiKey_)` (the spec notes both conventions exist).
+- **Auth fallback (implemented):** `PstrykClient::fetch` automatically retries once with a `Bearer ` prefix if the raw-key request returns 401/403 — both conventions exist in the wild, so a valid key works either way.
+- **NTP gate (implemented):** the app does not fetch until the clock is valid (`time() > 1.7e9`); it shows "Synchronizacja..." and rechecks every 2 s, so a slow-NTP boot doesn't sit on stale/empty data. Auth errors are sticky (own screen until the next OK fetch or BOOT re-provision); a 429 without `Retry-After` backs off 20 min (cap-safe).
 - **ASCII labels (intentional):** the built-in 6×8 font has no Polish diacritics, so labels are written without them (`sredniej`, `NASTEPNA`, `zl/kWh`). This is a deliberate v1 simplification; rendering proper `ś/ż/ł` ("średniej", "zł/kWh") comes with the nicer-font polish task deferred per spec §11.
 - **Deferred (per spec §11):** touch interaction, AMOLED/e-ink renderers, TLS CA pinning, backlight PWM dimming, `full_price` toggle.
 ```
