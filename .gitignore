@@ -10,6 +10,9 @@ secrets.h
 # Brainstorm visual-companion session files (not shipped)
 .superpowers/
 
+# Git worktrees (isolated feature workspaces)
+.worktrees/
+
 # Editor / OS
 .vscode/
 .DS_Store
