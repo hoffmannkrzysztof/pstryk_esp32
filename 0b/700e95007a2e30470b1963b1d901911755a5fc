@@ -1,0 +1,126 @@
+lib/EPD47/src/zlib/gzclose.c
+  3b83f6f6afa176f8 1-25
+lib/EPD47/src/zlib/CMakeLists.txt
+  3b83f6f6afa176f8 1-3
+lib/EPD47/src/zlib/gzlib.c
+  3b83f6f6afa176f8 1-637
+lib/EPD47/src/zlib/inffixed.h
+  3b83f6f6afa176f8 1-94
+lib/EPD47/library.json
+  3b83f6f6afa176f8 1-8
+lib/EPD47/src/zlib/crc32.c
+  3b83f6f6afa176f8 1-442
+lib/EPD47/src/zlib/inftrees.h
+  3b83f6f6afa176f8 1-62
+lib/EPD47/src/zlib/trees.h
+  3b83f6f6afa176f8 1-128
+lib/EPD47/src/zlib/zconf.h
+  3b83f6f6afa176f8 1-534
+lib/EPD47/src/zlib/uncompr.c
+  3b83f6f6afa176f8 1-93
+lib/EPD47/src/zlib/inflate.c
+  3b83f6f6afa176f8 1-1561
+lib/EPD47/src/zlib/zlib.h
+  3b83f6f6afa176f8 1-1912
+lib/EPD47/src/zlib/crc32.h
+  3b83f6f6afa176f8 1-441
+lib/EPD47/src/zlib/gzread.c
+  3b83f6f6afa176f8 1-654
+lib/EPD47/src/i2s_data_bus.c
+  3b83f6f6afa176f8 1-485
+src/app/SleepCycle.cpp
+  3b83f6f6afa176f8 1-20
+lib/EPD47/src/epd_driver.c
+  3b83f6f6afa176f8 1-1114
+lib/EPD47/src/i2s_data_bus.h
+  3b83f6f6afa176f8 1-104
+src/main.cpp
+  3b83f6f6afa176f8 3-7,9
+lib/EPD47/src/zlib/ChangeLog
+  3b83f6f6afa176f8 1-1515
+src/app/SleepCycle.h
+  3b83f6f6afa176f8 1-13
+lib/EPD47/src/zlib/deflate.h
+  3b83f6f6afa176f8 1-349
+lib/EPD47/src/zlib/README
+  3b83f6f6afa176f8 1-115
+lib/EPD47/src/libjpeg/libjpeg.c
+  3b83f6f6afa176f8 1-435
+lib/EPD47/src/ed047tc1.h
+  3b83f6f6afa176f8 1-142
+lib/EPD47/src/font.c
+  3b83f6f6afa176f8 1-497
+lib/EPD47/src/zlib/inflate.h
+  3b83f6f6afa176f8 1-125
+lib/EPD47/src/zlib/inftrees.c
+  3b83f6f6afa176f8 1-304
+lib/EPD47/src/zlib/zutil.h
+  3b83f6f6afa176f8 1-271
+lib/EPD47/src/zlib/adler32.c
+  3b83f6f6afa176f8 1-186
+lib/EPD47/src/zlib/infback.c
+  3b83f6f6afa176f8 1-640
+lib/EPD47/src/libjpeg/libjpeg.h
+  3b83f6f6afa176f8 1-55
+src/render/EpdRenderer.h
+  3b83f6f6afa176f8 1-33
+lib/EPD47/src/component.mk
+  3b83f6f6afa176f8 1-2
+lib/EPD47/src/zlib/trees.c
+  3b83f6f6afa176f8 1-1203
+lib/EPD47/src/firasans.h
+  3b83f6f6afa176f8 1-8199
+lib/EPD47/src/zlib/inffast.h
+  3b83f6f6afa176f8 1-11
+lib/EPD47/src/zlib/zutil.c
+  3b83f6f6afa176f8 1-325
+src/render/EpdRenderer.cpp
+  3b83f6f6afa176f8 1-83
+platformio.ini
+  3b83f6f6afa176f8 18-23,40-71
+board/T5-ePaper-S3.json
+  3b83f6f6afa176f8 1-31
+lib/EPD47/LICENSE
+  3b83f6f6afa176f8 1-674
+lib/EPD47/src/CMakeLists.txt
+  3b83f6f6afa176f8 1-4
+lib/EPD47/src/libjpeg/CMakeLists.txt
+  3b83f6f6afa176f8 1-3
+lib/EPD47/src/zlib/compress.c
+  3b83f6f6afa176f8 1-86
+lib/EPD47/src/zlib/gzwrite.c
+  3b83f6f6afa176f8 1-665
+lib/EPD47/src/zlib/inffast.c
+  3b83f6f6afa176f8 1-323
+lib/EPD47/src/libjpeg/component.mk
+  3b83f6f6afa176f8 1-2
+lib/EPD47/src/zlib/component.mk
+  3b83f6f6afa176f8 1-2
+lib/EPD47/src/zlib/deflate.c
+  3b83f6f6afa176f8 1-2163
+lib/EPD47/src/ed047tc1.c
+  3b83f6f6afa176f8 1-269
+lib/EPD47/src/zlib/gzguts.h
+  3b83f6f6afa176f8 1-219
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "0b700e95007a2e30470b1963b1d901911755a5fc",
+  "prompts": {
+    "3b83f6f6afa176f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2fc1bc3a-a48f-4ef6-b420-276e26b12abd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 55213,
+      "total_deletions": 1,
+      "accepted_lines": 55213,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/3767fa699877630c97525ea190e1305b73f2b29199ec5cf08e5ae88bda1a9ba5"
+    }
+  }
+}
