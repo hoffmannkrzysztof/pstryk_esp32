@@ -1,0 +1,28 @@
+src/main.cpp
+  3694524a809b7b23 3,6-20,23-24,27-35
+src/render/Pages.cpp
+  3694524a809b7b23 1-155
+src/render/Pages.h
+  3694524a809b7b23 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "ee126666e1e7f0dafc64790c8d9a8917d9208115",
+  "prompts": {
+    "3694524a809b7b23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "934e0760-5f7b-427f-a103-ca1f6c954f7b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 198,
+      "total_deletions": 12,
+      "accepted_lines": 198,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/ad21e5c4fc5cd64740649415fd967d9310186aed4fd0bd5bae5a319e67f9d077"
+    }
+  }
+}
