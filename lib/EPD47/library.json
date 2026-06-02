@@ -1,0 +1,8 @@
+{
+  "name": "EPD47",
+  "version": "0.1.0-lilygo-esp32s3",
+  "description": "Vendored LilyGo-EPD47 (esp32s3 branch) e-paper driver for ED047TC1 on ESP32-S3. Source: github.com/Xinyuan-LilyGO/LilyGo-EPD47 (epdiy-derived).",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": { "srcDir": "src" }
+}
