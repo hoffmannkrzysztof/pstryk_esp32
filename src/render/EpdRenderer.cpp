@@ -3,7 +3,8 @@
 #include <cstring>
 extern "C" {
 #include "epd_driver.h"
-#include "firasans.h"   // const GFXfont FiraSans
+#include "ui_font_body.h"   // const GFXfont UiSansBody  (~30 px line, Fira Sans)
+#include "ui_font_head.h"   // const GFXfont UiSansHead  (~45 px line, Fira Sans)
 }
 
 // Adaptation notes vs the task's assumed LilyGo API. The actual vendored
@@ -58,28 +59,35 @@ void EpdRenderer::drawLine(int x0, int y0, int x1, int y1, uint16_t c) {
   epd_draw_line(x0, y0, x1, y1, (uint8_t)(c & 0xFF), fb_);
 }
 
-void EpdRenderer::text(int x, int y, const char* s, uint16_t color, int /*size*/) {
-  int32_t cx = x, cy = y + textHeight(1);
-  // Map our 8-bit luminance (0=black..255=white, from EpdRenderer::rgb) to the
-  // driver's 4-bit grayscale foreground. Keep the background white and do NOT
-  // request DRAW_BACKGROUND, so text composites onto the existing framebuffer
-  // without an opaque box. write_mode (vs write_string) is the only path that
-  // accepts a per-call FontProperties for the foreground color.
-  FontProperties props = {};
-  props.fg_color = (uint8_t)((color & 0xFF) >> 4);
-  props.bg_color = 15;       // white
-  props.fallback_glyph = 0;
-  props.flags = 0;           // no DRAW_BACKGROUND -> transparent background
-  write_mode((const GFXfont*)&FiraSans, s, &cx, &cy, fb_, BLACK_ON_WHITE, &props);
+// size>=2 selects the larger heading font; otherwise the body font.
+static const GFXfont* fontForSize(int size) {
+  return size >= 2 ? &UiSansHead : &UiSansBody;
 }
 
-int EpdRenderer::textWidth(const char* s, int /*size*/) {
+void EpdRenderer::text(int x, int y, const char* s, uint16_t color, int size) {
+  const GFXfont* f = fontForSize(size);
+  // Top-left anchor (per IRenderer contract): the driver places the cursor at the
+  // baseline, so drop it by the font ascender to put the glyph top near y.
+  int32_t cx = x, cy = y + f->ascender;
+  // Map our 8-bit luminance (0=black..255=white, from EpdRenderer::rgb) to the
+  // driver's 4-bit grayscale foreground. White background, no DRAW_BACKGROUND so
+  // text composites onto the existing framebuffer without an opaque box.
+  FontProperties props = {};
+  props.fg_color = (uint8_t)((color & 0xFF) >> 4);
+  props.bg_color = 15;
+  props.fallback_glyph = 0;
+  props.flags = 0;
+  write_mode(f, s, &cx, &cy, fb_, BLACK_ON_WHITE, &props);
+}
+
+int EpdRenderer::textWidth(const char* s, int size) {
+  const GFXfont* f = fontForSize(size);
   int32_t x = 0, y = 0, x1 = 0, y1 = 0, w = 0, h = 0;
-  get_text_bounds((const GFXfont*)&FiraSans, s, &x, &y, &x1, &y1, &w, &h, nullptr);
+  get_text_bounds(f, s, &x, &y, &x1, &y1, &w, &h, nullptr);
   return (int)w;
 }
-int EpdRenderer::textHeight(int /*size*/) {
-  return FiraSans.advance_y;
+int EpdRenderer::textHeight(int size) {
+  return fontForSize(size)->advance_y;
 }
 
 void EpdRenderer::present() {

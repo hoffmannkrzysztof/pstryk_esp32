@@ -11,8 +11,8 @@ namespace {
 struct Pal {
   uint16_t bg, ink, mid, light, dark;
   explicit Pal(IRenderer& r)
-    : bg(r.rgb(255,255,255)), ink(r.rgb(0,0,0)), mid(r.rgb(140,140,140)),
-      light(r.rgb(210,210,210)), dark(r.rgb(40,40,40)) {}
+    : bg(r.rgb(255,255,255)), ink(r.rgb(0,0,0)), mid(r.rgb(150,150,150)),
+      light(r.rgb(205,205,205)), dark(r.rgb(40,40,40)) {}
 };
 
 // 7-segment masks, bit0=a(top) b c d(bottom) e f g(middle).
@@ -29,13 +29,13 @@ void drawDigit(IRenderer& r, int x, int y, int w, int h, int t, uint16_t c, uint
   if (m & 0x40) r.fillRect(x, midY, w, t, c);                    // g
 }
 
-// Render a price string (digits, ',' and '.') as big 7-seg blocks. Returns end x.
+// Render a price string (digits, ',' '.') as big 7-seg blocks. Returns end x.
 int drawBigPrice(IRenderer& r, const Pal& p, int x, int y, int h, const char* s) {
   int w = (int)(h * 0.58f), t = (int)(h * 0.13f), gap = (int)(h * 0.16f);
   int cx = x;
   for (const char* q = s; *q; ++q) {
     if (*q == ',' || *q == '.') {
-      r.fillRect(cx, y + h - t, t, t, p.ink);                    // comma block
+      r.fillRect(cx, y + h - t, t, t, p.ink);                    // separator block
       cx += t + gap;
     } else if (*q >= '0' && *q <= '9') {
       drawDigit(r, cx, y, w, h, t, p.ink, SEG[*q - '0']);
@@ -49,42 +49,34 @@ int drawBigPrice(IRenderer& r, const Pal& p, int x, int y, int h, const char* s)
 
 void hourLabel(int hour, char* out) { std::snprintf(out, 6, "%02d:00", hour); }
 
-// Chart in [x,y,w,h]: avg dashed line, above-avg dark / below-avg light bars,
-// min v / max ^ tags, current hour ringed.
+// Bars + dashed daily-average line + current-hour ring. (Min/max labels are drawn
+// by the caller beneath the chart so they never overlap the bars.)
 void drawChart(IRenderer& r, const Pal& p, const std::vector<Bar>& bars,
                float avg, int liveIdx, int x, int y, int w, int h) {
-  if (bars.empty()) { r.text(x, y + h / 2 - 10, "brak danych jeszcze", p.mid, 1); return; }
-  float maxP = 0.0001f, minP = 1e9f;
-  int minI = 0, maxI = 0, n = (int)bars.size();
-  for (int i = 0; i < n; ++i) {
-    if (bars[i].price > maxP) { maxP = bars[i].price; maxI = i; }
-    if (bars[i].price < minP) { minP = bars[i].price; minI = i; }
-  }
+  if (bars.empty()) return;
+  float maxP = 0.0001f;
+  int n = (int)bars.size();
+  for (int i = 0; i < n; ++i) if (bars[i].price > maxP) maxP = bars[i].price;
   float top = maxP * 1.12f;
   int gap = 2, bw = (w - (n - 1) * gap) / n; if (bw < 1) bw = 1;
   for (int i = 0; i < n; ++i) {
-    int bh = (int)((bars[i].price / top) * h);
+    int bh = (int)((bars[i].price / top) * h); if (bh < 2) bh = 2;
     int bx = x + i * (bw + gap), by = y + h - bh;
     uint16_t c = (bars[i].price >= avg) ? p.dark : p.light;
     r.fillRect(bx, by, bw, bh, c);
     if (i == liveIdx) r.drawRect(bx - 1, by - 1, bw + 2, bh + 2, p.ink);
-    if (i == minI || i == maxI) {
-      // Tag the cheapest/priciest hour with arrow + hour + price (design 4.2).
-      char price[8]; formatPln(bars[i].price, price);
-      char label[24];
-      std::snprintf(label, sizeof(label), "%s %02d:00 %s",
-                    (i == minI) ? "v" : "^", bars[i].hour, price);
-      int lw = r.textWidth(label, 1);
-      int lx = bx - 2;
-      if (lx < x) lx = x;                       // clamp to chart left edge
-      if (lx > x + w - lw) lx = x + w - lw;     // clamp to chart right edge
-      if (lx < x) lx = x;                       // label wider than chart: pin left
-      r.text(lx, by - 14, label, p.ink, 1);
-    }
   }
-  // dashed average line
   int ay = y + h - (int)((avg / top) * h);
   for (int dx = x; dx < x + w; dx += 10) r.drawLine(dx, ay, dx + 5, ay, p.ink);
+}
+
+// "v HH:00 P   ^ HH:00 P" — cheapest / priciest hour + price under a chart.
+void extremesLine(IRenderer& r, const Pal& p, const Bar& lo, const Bar& hi, int x, int y) {
+  char pl[8], ph[8]; formatPln(lo.price, pl); formatPln(hi.price, ph);
+  char s[48];
+  std::snprintf(s, sizeof(s), "v %02d:00 %s    ^ %02d:00 %s",
+                lo.hour, pl, hi.hour, ph);
+  r.text(x, y, s, p.ink, 1);
 }
 
 }  // namespace
@@ -93,61 +85,77 @@ void drawDashboard(IRenderer& r, const PriceView& v, const EpdStatus& st) {
   Pal p(r);
   r.clear(p.bg);
   const int W = r.width();
+  const int M = 24;
+  const int LB = r.textHeight(1);   // body line height
+  const int LH = r.textHeight(2);   // heading line height
 
   if (!v.hasData) { drawMessage(r, "Brak danych", st.clockHHMM); return; }
+
+  char buf[8], line[48];
 
   // --- status bar ---
   char status[64];
   std::snprintf(status, sizeof(status), "Pstryk  %s%s", st.clockHHMM,
-                st.stale ? "  * nieaktualne" : "");
-  r.text(20, 8, status, p.ink, 1);
+                st.stale ? "  * nieakt." : "");
+  r.text(M, 10, status, p.ink, 1);
   char bat[20];
-  if (st.batteryPct >= 0) std::snprintf(bat, sizeof(bat), "%s %d%%",
-                                        st.batteryLow ? "! BAT" : "BAT", st.batteryPct);
-  else std::strcpy(bat, st.wifiOk ? "WiFi" : "WiFi?");
-  r.text(W - r.textWidth(bat, 1) - 20, 8, bat, p.ink, 1);
-  r.drawLine(20, 40, W - 20, 40, p.light);
+  if (st.batteryPct >= 0)
+    std::snprintf(bat, sizeof(bat), "%s %d%%", st.batteryLow ? "! BAT" : "BAT", st.batteryPct);
+  else
+    std::strcpy(bat, st.wifiOk ? "WiFi" : "WiFi?");
+  r.text(W - r.textWidth(bat, 1) - M, 10, bat, p.ink, 1);
+  int sy = 10 + LB + 6;
+  r.drawLine(M, sy, W - M, sy, p.mid);
 
-  // --- hero ---
-  char buf[8];
+  // --- hero (left): label, big 7-seg price, below/above-average pill ---
   char hl[6]; hourLabel(v.currentHour, hl);
   char head[24]; std::snprintf(head, sizeof(head), "TERAZ %s", hl);
-  r.text(28, 56, head, p.ink, 1);
+  int heroY = sy + 12;
+  r.text(M, heroY, head, p.ink, 2);
+
+  int priceY = heroY + LH + 8, priceH = 150;
   formatPln(v.currentBuy, buf);
-  int endx = drawBigPrice(r, p, 28, 92, 150, buf);
-  r.text(endx + 16, 200, "zl/kWh", p.ink, 1);
-  // below/above average pill
+  int endx = drawBigPrice(r, p, M, priceY, priceH, buf);
+  r.text(endx + 16, priceY + priceH - LH, "zl/kWh", p.ink, 2);
+
+  int pillY = priceY + priceH + 16;
   const char* tag = v.currentBelowAvg ? "ponizej sredniej" : "powyzej sredniej";
-  int pw = r.textWidth(tag, 1) + 24;
-  r.drawRect(28, 250, pw, 30, p.ink);
-  r.text(40, 257, tag, p.ink, 1);
+  r.drawRect(M, pillY, r.textWidth(tag, 1) + 28, LB + 12, p.ink);
+  r.text(M + 14, pillY + 6, tag, p.ink, 1);
 
-  // hero right column
-  int rx = 560;
-  r.drawLine(rx - 24, 56, rx - 24, 280, p.light);
+  // --- hero right column: next / sell / average (label + value per line) ---
+  int rx = 580, ry = heroY, rstep = LB + 12;
+  r.drawLine(rx - 26, heroY, rx - 26, pillY + LB, p.mid);
   char nh[6]; hourLabel(v.nextHour, nh);
-  char line[28];
   formatPln(v.nextBuy, buf);
-  std::snprintf(line, sizeof(line), "Nastepna %s", nh);
-  r.text(rx, 64, line, p.mid, 1);
-  std::snprintf(line, sizeof(line), "%s %s", buf,
+  std::snprintf(line, sizeof(line), "Nastepna %s:  %s %s", nh, buf,
                 v.nextTrend == Trend::Up ? "^" : (v.nextTrend == Trend::Down ? "v" : "-"));
-  r.text(rx, 84, line, p.ink, 1);
+  r.text(rx, ry, line, p.ink, 1);
   formatPln(v.currentSell, buf);
-  r.text(rx, 130, "Sprzedaz PV", p.mid, 1); r.text(rx, 150, buf, p.ink, 1);
+  std::snprintf(line, sizeof(line), "Sprzedaz PV:  %s", buf);
+  r.text(rx, ry + rstep, line, p.ink, 1);
   formatPln(v.todayAvg, buf);
-  r.text(rx, 196, "Srednia dzis", p.mid, 1); r.text(rx, 216, buf, p.ink, 1);
+  std::snprintf(line, sizeof(line), "Srednia dzis:  %s", buf);
+  r.text(rx, ry + 2 * rstep, line, p.ink, 1);
 
-  // --- charts ---
-  int cy = 330, ch = 150, half = (W - 60) / 2;
-  r.text(28, cy - 22, "Dzis", p.ink, 1);
-  drawChart(r, p, v.today, v.todayAvg, v.liveIndex, 28, cy, half, ch);
-  int rxc = 28 + half + 24;
-  r.text(rxc, cy - 22, "Jutro", p.ink, 1);
-  if (v.hasTomorrow)
-    drawChart(r, p, v.tomorrow, v.tomorrowAvg, -1, rxc, cy, half, ch);
-  else
-    r.text(rxc, cy + ch / 2 - 10, "Jutro: brak danych jeszcze", p.mid, 1);
+  // --- charts (Dzis | Jutro) ---
+  int cTitleY = 320;
+  int half = (W - 3 * M) / 2;
+  int barsY = cTitleY + LH + 6, barsH = 110;
+  int mmY = barsY + barsH + 8;
+  int rxc = M + half + M;
+
+  r.text(M, cTitleY, "Dzis", p.ink, 2);
+  drawChart(r, p, v.today, v.todayAvg, v.liveIndex, M, barsY, half, barsH);
+  extremesLine(r, p, v.todayCheapest, v.todayExpensive, M, mmY);
+
+  r.text(rxc, cTitleY, "Jutro", p.ink, 2);
+  if (v.hasTomorrow) {
+    drawChart(r, p, v.tomorrow, v.tomorrowAvg, -1, rxc, barsY, half, barsH);
+    extremesLine(r, p, v.tomorrowCheapest, v.tomorrowExpensive, rxc, mmY);
+  } else {
+    r.text(rxc, barsY + barsH / 2 - LB / 2, "brak danych jeszcze", p.ink, 1);
+  }
 
   r.present();
 }
@@ -155,8 +163,11 @@ void drawDashboard(IRenderer& r, const PriceView& v, const EpdStatus& st) {
 void drawMessage(IRenderer& r, const char* line1, const char* line2) {
   Pal p(r);
   r.clear(p.bg);
-  r.text(40, 200, line1, p.ink, 1);
-  if (line2 && line2[0]) r.text(40, 250, line2, p.mid, 1);
+  int lh = r.textHeight(2);
+  int y = r.height() / 2 - lh;
+  r.text((r.width() - r.textWidth(line1, 2)) / 2, y, line1, p.ink, 2);
+  if (line2 && line2[0])
+    r.text((r.width() - r.textWidth(line2, 1)) / 2, y + lh + 12, line2, p.ink, 1);
   r.present();
 }
 
