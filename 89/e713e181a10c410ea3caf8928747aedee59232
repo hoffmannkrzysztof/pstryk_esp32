@@ -1,0 +1,26 @@
+src/app/SleepCycle.cpp
+  3b83f6f6afa176f8 15,84-91,105-107,158-160,170-171
+src/render/EpdDashboard.cpp
+  3b83f6f6afa176f8 97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "89e713e181a10c410ea3caf8928747aedee59232",
+  "prompts": {
+    "3b83f6f6afa176f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2fc1bc3a-a48f-4ef6-b420-276e26b12abd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Krzysztof Hoffmann",
+      "messages": [],
+      "total_additions": 18,
+      "total_deletions": 8,
+      "accepted_lines": 27926,
+      "overriden_lines": 0,
+      "messages_url": "https://gitai.miquido.dev/cas/161367be32e10aae7fa7fb9eadf6c4d63f6a47bfee3c1491219b9cc9e4693882"
+    }
+  }
+}
