@@ -17,6 +17,8 @@ struct PriceView {
   bool  hasData = false;
 
   // Page: Teraz
+  // currentBuy is THE headline value every board renders (= price_gross, VAT
+  // incl.; see PriceData.h canonical contract). Renderers display this verbatim.
   float currentBuy = 0, currentSell = 0;
   int   currentHour = 0;
   bool  currentBelowAvg = true;

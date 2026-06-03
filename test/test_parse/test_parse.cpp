@@ -24,6 +24,20 @@ void test_maps_fields() {
   TEST_ASSERT_FLOAT_WITHIN(0.001, 0.31f, f.sell);
 }
 
+// Cross-board canonical-field guard. Every board (AMOLED, e-paper, and any
+// future display) shows PriceView.currentBuy, which is PriceFrame.buy. This
+// locks buy=price_gross / sell=price_prosumer_gross so a future edit can't
+// silently switch a board to net/tge/full -- the exact regression that made the
+// e-paper board read a tax-stripped value. frame[0] carries every real field
+// with DISTINCT values, so an assert on 0.30 excludes net(0.24)/tge(0.20)/full(0.45).
+void test_buy_is_gross() {
+  PriceData d;
+  parsePricing(kPricingJson, d);
+  const PriceFrame& f = d.frames[0];
+  TEST_ASSERT_FLOAT_WITHIN(0.001, 0.30f, f.buy);   // price_gross (VAT incl.), NOT net/tge/full
+  TEST_ASSERT_FLOAT_WITHIN(0.001, 0.18f, f.sell);  // price_prosumer_gross, NOT price_prosumer_net
+}
+
 void test_flags_default_false() {
   PriceData d;
   parsePricing(kPricingJson, d);
@@ -46,6 +60,7 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_parses_all_frames);
   RUN_TEST(test_maps_fields);
+  RUN_TEST(test_buy_is_gross);
   RUN_TEST(test_flags_default_false);
   RUN_TEST(test_today_only);
   RUN_TEST(test_malformed_returns_false);

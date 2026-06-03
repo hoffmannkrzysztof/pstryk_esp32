@@ -12,6 +12,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
+#include <esp_sntp.h>
 #include "driver/rtc_io.h"
 #include <sys/time.h>
 #include <cstdio>
@@ -21,6 +22,12 @@ extern "C" {
 }
 
 namespace pstryk {
+
+// NTP sync handshake: configTzTime() starts SNTP asynchronously; this flag (set
+// by the notification callback) lets setup() block until a REAL sync lands,
+// instead of assuming a plausible-looking clock is correct.
+static volatile bool s_ntpSynced = false;
+static void onNtpSync(struct timeval*) { s_ntpSynced = true; }
 
 static const int      PIN_BTN  = 21;   // user button (active LOW)
 static const int      PIN_BATT = 14;   // battery ADC (ADC2) via 2:1 divider
@@ -119,7 +126,10 @@ void SleepCycle::setup() {
   bool batLow = false;
   int batPct = readBatteryPercent(batLow);
 
-  // 3) seed clock from RTC so we have time even if Wi-Fi fails
+  // 3) seed clock from RTC so we have SOME time even if Wi-Fi fails. This is only
+  // a fallback -- when Wi-Fi is up, NTP below overrides it (step 5). The RTC must
+  // never be the final authority on a connected cycle, or a wrong RTC silently
+  // wins (the +2h bug).
   time_t rtcEpoch;
   if (rtcRead(rtcEpoch)) {
     struct timeval tv = { rtcEpoch, 0 }; settimeofday(&tv, nullptr);
@@ -133,10 +143,18 @@ void SleepCycle::setup() {
 
   PriceView view;
   if (wifi) {
-    // 5) NTP -> system clock + PCF8563
+    // 5) NTP -> system clock + PCF8563. NTP is AUTHORITATIVE on a connected cycle.
+    // The old gate `time(nullptr) < kTimeValid` never waited here, because step 3
+    // already seeded a plausible (but wrong) RTC time past kTimeValid -- so a +2h
+    // RTC silently won and the board rendered the wrong hour's price. Wait for a
+    // REAL SNTP sync via the notification callback, then trust it and refresh the
+    // RTC from it. (The AMOLED board has no RTC, so it always waited here and was
+    // correct -- that was the whole asymmetry.)
+    s_ntpSynced = false;
+    sntp_set_time_sync_notification_cb(&onNtpSync);
     configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.google.com");
-    for (int i = 0; i < 40 && time(nullptr) < kTimeValid; ++i) delay(250);
-    if (time(nullptr) > kTimeValid) rtcWrite(time(nullptr));
+    for (int i = 0; i < 60 && !s_ntpSynced; ++i) delay(250);   // up to 15 s
+    if (s_ntpSynced && time(nullptr) > kTimeValid) rtcWrite(time(nullptr));
   }
 
   time_t now = time(nullptr);
