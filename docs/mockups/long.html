@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Pstryk — T-Display-S3-Long mockup</title>
+<style>
+  /* Rendered at 2x for crisp screenshots (see body{zoom}). All coordinates below
+     are in the device's native 640x180 pixel space, matching src/render/Pages.cpp. */
+  html, body { margin: 0; padding: 0; background: #15171c; }
+  body { zoom: 2; font-family: "Menlo", "Consolas", monospace; }
+  .wrap { padding: 18px 18px 6px; }
+  .cap { color: #c9d2e0; font-family: -apple-system, "Segoe UI", sans-serif;
+         font-size: 11px; letter-spacing: .04em; margin: 16px 0 6px 2px; }
+  .cap b { color: #fff; font-weight: 600; }
+  .screen { position: relative; width: 640px; height: 180px; background: #0a0e14;
+            overflow: hidden; border-radius: 10px; box-shadow: 0 2px 10px #0008; }
+  .t { position: absolute; white-space: nowrap; line-height: 1; font-weight: 700; }
+  .bar { position: absolute; }
+  .ring { position: absolute; box-sizing: border-box; }
+  .box { position: absolute; border-radius: 12px; }
+  .line { position: absolute; }
+  .dot { position: absolute; border-radius: 50%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="cap"><b>1 / 4 &middot; Teraz</b> — bieżąca cena kupna + trend i kolumna kontekstu</div>
+  <div class="screen" id="p_teraz"></div>
+
+  <div class="cap"><b>2 / 4 &middot; Wykres 24h</b> — godzinowy wykres słupkowy na dziś (tania zielona, droga czerwona, bieżąca w ramce)</div>
+  <div class="screen" id="p_chart"></div>
+
+  <div class="cap"><b>3 / 4 &middot; Najtaniej / Najdrożej</b> — skrajne godziny dnia</div>
+  <div class="screen" id="p_ext"></div>
+
+  <div class="cap"><b>4 / 4 &middot; Jutro</b> — wykres jutra (dołącza do rotacji dopiero gdy Pstryk opublikuje ceny)</div>
+  <div class="screen" id="p_jutro"></div>
+</div>
+
+<script>
+// ---- Palette (RGB888, identical to Pages.cpp) ----
+const C = {
+  bg:'#0a0e14', text:'#e8edf4', muted:'#8b97a8', green:'#34d399',
+  red:'#f87171', amber:'#fbbf24', barbg:'#3b4a66', line:'#1e2738',
+  boxGreen:'#102a22', boxRed:'#2a1212'
+};
+// Adafruit-GFX classic font: 6px x 8px cell at size 1, scaled by `size`.
+const CW = 6, CH = 8;
+
+// Sample day (PLN/kWh). cheap = green, exp = red, live = current hour.
+const today = [
+ {h:0,p:0.42},{h:1,p:0.38},{h:2,p:0.35,cheap:1},{h:3,p:0.34,cheap:1},
+ {h:4,p:0.36,cheap:1},{h:5,p:0.41},{h:6,p:0.55},{h:7,p:0.68},
+ {h:8,p:0.72},{h:9,p:0.64},{h:10,p:0.51},{h:11,p:0.44},
+ {h:12,p:0.39,cheap:1},{h:13,p:0.37,cheap:1},{h:14,p:0.40,live:1},{h:15,p:0.48},
+ {h:16,p:0.59},{h:17,p:0.74},{h:18,p:0.89,exp:1},{h:19,p:0.95,exp:1},
+ {h:20,p:0.86,exp:1},{h:21,p:0.71},{h:22,p:0.58},{h:23,p:0.49}
+];
+const tomorrow = [
+ 0.40,0.37,0.34,0.33,0.35,0.39,0.52,0.66,0.70,0.60,0.49,0.42,
+ 0.36,0.35,0.38,0.45,0.56,0.70,0.84,0.91,0.80,0.66,0.55,0.47
+].map((p,h)=>({h,p,cheap:[2,3,4,12,13].includes(h),exp:[18,19,20].includes(h)}));
+
+const fmt = v => v.toFixed(2).replace('.', ',');
+
+function el(parent, cls){ const d=document.createElement('div'); d.className=cls; parent.appendChild(d); return d; }
+
+// Text node anchored top-left at (x,y) in device px, matching renderer contract.
+function text(parent, x, y, s, color, size){
+  const t = el(parent,'t');
+  t.textContent = s;
+  t.style.left = x+'px'; t.style.top = y+'px';
+  t.style.color = color;
+  t.style.fontSize = (CH*size)+'px';
+  t.style.letterSpacing = (size*1.2)+'px';
+  return t;
+}
+function rect(parent, x,y,w,h,color){
+  const b = el(parent,'bar');
+  b.style.left=x+'px'; b.style.top=y+'px'; b.style.width=w+'px'; b.style.height=h+'px';
+  b.style.background=color; return b;
+}
+function hLine(parent, x,y,w,color){ const l=el(parent,'line'); l.style.left=x+'px'; l.style.top=y+'px'; l.style.width=w+'px'; l.style.height='1px'; l.style.background=color; }
+function vLine(parent, x,y,h,color){ const l=el(parent,'line'); l.style.left=x+'px'; l.style.top=y+'px'; l.style.width='1px'; l.style.height=h+'px'; l.style.background=color; }
+
+function strip(scr, left, dotIdx, dotCount){
+  text(scr, 16, 8, left, C.muted, 1);
+  const dotR=6, gap=8, total=dotCount*(dotR+gap);
+  let x = 640 - 16 - total;
+  for(let i=0;i<dotCount;i++){
+    const d = el(scr,'dot');
+    d.style.left=(x+i*(dotR+gap))+'px'; d.style.top='9px';
+    d.style.width=dotR+'px'; d.style.height=dotR+'px';
+    d.style.background = (i===dotIdx)? C.text : C.barbg;
+  }
+}
+
+function chart(scr, bars, x,y,w,h){
+  let maxP=0.0001; bars.forEach(b=>{ if(b.p>maxP) maxP=b.p; }); maxP*=1.1;
+  const n=bars.length, gap=3; let bw=Math.floor((w-(n-1)*gap)/n); if(bw<1)bw=1;
+  bars.forEach((b,i)=>{
+    const bh=Math.round((b.p/maxP)*h);
+    const bx=x+i*(bw+gap), by=y+h-bh;
+    const c = b.cheap? C.green : (b.exp? C.red : C.barbg);
+    rect(scr,bx,by,bw,bh,c);
+    if(b.live){ const r=el(scr,'ring'); r.style.left=(bx-1)+'px'; r.style.top=(by-1)+'px';
+      r.style.width=(bw+2)+'px'; r.style.height=(bh+2)+'px'; r.style.border='1px solid '+C.text; }
+  });
+}
+
+// ---------- Page 1: Teraz ----------
+(function(){
+  const scr=document.getElementById('p_teraz');
+  strip(scr,'14:23  Pstryk',0,4);
+  text(scr,16,34,'TERAZ 14:00-15:00',C.muted,1);
+  text(scr, 16 + ('TERAZ 14:00-15:00'.length*CW) + 14, 34, 'ponizej sredniej', C.green, 1);
+  text(scr,16,56,'0,40',C.text,8);
+  const after = 16 + (4*CW*8) + 12;
+  text(scr,after,64,'zl/kWh',C.muted,2);
+  text(scr,after,96,'^',C.red,4);            // next-hour up -> red
+  const rx=430;
+  vLine(scr, rx-16, 44, 168-44, C.line);
+  text(scr,rx,44,'SPRZEDAZ (PV)',C.muted,1); text(scr,rx,56,'0,31',C.text,3);
+  text(scr,rx,92,'SREDNIA DZIS',C.muted,1);  text(scr,rx,104,'0,55',C.text,3);
+  text(scr,rx,140,'NASTEPNA 15:00',C.muted,1); text(scr,rx,152,'0,48',C.red,3);
+})();
+
+// ---------- Page 2: Wykres 24h ----------
+(function(){
+  const scr=document.getElementById('p_chart');
+  strip(scr,'Dzis',1,4);
+  chart(scr,today,16,40,608,110);
+  text(scr,16,156,'00',C.muted,1);
+  text(scr,16+608/4,156,'06',C.muted,1);
+  text(scr,16+608/2,156,'12',C.muted,1);
+  text(scr,16+3*608/4,156,'18',C.muted,1);
+  text(scr,600,156,'23',C.muted,1);
+})();
+
+// ---------- Page 3: Najtaniej / Najdrozej ----------
+(function(){
+  const scr=document.getElementById('p_ext');
+  strip(scr,'Dzis',2,4);
+  rect(scr,16,44,296,120,C.boxGreen).style.borderRadius='12px';
+  text(scr,32,56,'v NAJTANIEJ DZIS',C.green,1);
+  text(scr,32,80,'03:00',C.text,5);
+  text(scr,32,132,'0,34 zl/kWh',C.muted,2);
+  rect(scr,328,44,296,120,C.boxRed).style.borderRadius='12px';
+  text(scr,344,56,'^ NAJDROZEJ DZIS',C.red,1);
+  text(scr,344,80,'19:00',C.text,5);
+  text(scr,344,132,'0,95 zl/kWh',C.muted,2);
+})();
+
+// ---------- Page 4: Jutro ----------
+(function(){
+  const scr=document.getElementById('p_jutro');
+  strip(scr,'Jutro',3,4);
+  chart(scr,tomorrow,16,36,608,90);
+  text(scr,16,138,'Najtaniej',C.muted,1);
+  text(scr,16,152,'v 03:00  0,33 zl',C.green,2);
+  text(scr,330,138,'Najdrozej',C.muted,1);
+  text(scr,330,152,'^ 19:00  0,91 zl',C.red,2);
+})();
+</script>
+</body>
+</html>

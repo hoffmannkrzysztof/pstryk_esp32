@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Pstryk — T5 4.7" e-paper mockup</title>
+<style>
+  /* Rendered at 2x for crisp screenshots. Coordinates are in the panel's native
+     960x540 pixel space, matching src/render/EpdDashboard.cpp. White background,
+     black ink, 16-level grayscale — like the real e-ink panel. */
+  html, body { margin: 0; padding: 0; background: #d8dade; }
+  body { zoom: 2; }
+  .frame { padding: 24px; }
+  .screen { position: relative; width: 960px; height: 540px; background: #ffffff;
+            font-family: "Fira Sans", -apple-system, "Segoe UI", Helvetica, sans-serif;
+            box-shadow: 0 4px 18px #0006; overflow: hidden; }
+  .t { position: absolute; white-space: nowrap; color: #000; line-height: 1; }
+  .seg { position: absolute; background: #000; }
+  .bar { position: absolute; }
+  .ring { position: absolute; box-sizing: border-box; border: 2px solid #000; }
+  .ln { position: absolute; }
+  .pill { position: absolute; box-sizing: border-box; border: 2px solid #000; }
+  .dash { position: absolute; background: #000; height: 2px; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="screen" id="epd"></div>
+</div>
+<script>
+const C = { ink:'#000', mid:'#969696', light:'#cdcdcd', dark:'#282828' };
+const W = 960, M = 24;
+const LB = 30;   // textHeight(1)  ~ Fira Sans body line
+const LH = 45;   // textHeight(2)  ~ Fira Sans heading line
+const FB = 21;   // body font px
+const FH = 32;   // heading font px
+
+const today = [
+ {h:0,p:0.42},{h:1,p:0.38},{h:2,p:0.35},{h:3,p:0.34},
+ {h:4,p:0.36},{h:5,p:0.41},{h:6,p:0.55},{h:7,p:0.68},
+ {h:8,p:0.72},{h:9,p:0.64},{h:10,p:0.51},{h:11,p:0.44},
+ {h:12,p:0.39},{h:13,p:0.37},{h:14,p:0.40},{h:15,p:0.48},
+ {h:16,p:0.59},{h:17,p:0.74},{h:18,p:0.89},{h:19,p:0.95},
+ {h:20,p:0.86},{h:21,p:0.71},{h:22,p:0.58},{h:23,p:0.49}
+];
+const tomorrow = [
+ 0.40,0.37,0.34,0.33,0.35,0.39,0.52,0.66,0.70,0.60,0.49,0.42,
+ 0.36,0.35,0.38,0.45,0.56,0.70,0.84,0.91,0.80,0.66,0.55,0.47
+].map((p,h)=>({h,p}));
+const todayAvg=0.55, tomorrowAvg=0.53, liveIndex=14;
+const fmt = v => v.toFixed(2).replace('.', ',');
+
+const scr = document.getElementById('epd');
+function el(cls,p){ const d=document.createElement('div'); d.className=cls; (p||scr).appendChild(d); return d; }
+function text(x,y,s,size,color){
+  const t=el('t'); t.textContent=s; t.style.left=x+'px'; t.style.top=y+'px';
+  t.style.fontSize=(size>=2?FH:FB)+'px'; t.style.color=color||C.ink;
+  if(size>=2) t.style.fontWeight='600';
+  return t;
+}
+function textW(s,size){ const t=text(-9999,-9999,s,size); const w=t.getBoundingClientRect().width/2; return w; }
+function rect(x,y,w,h,color,cls){ const b=el(cls||'bar'); b.style.left=x+'px'; b.style.top=y+'px'; b.style.width=w+'px'; b.style.height=h+'px'; if(color)b.style.background=color; return b; }
+function hLine(x,y,w,color){ const l=el('ln'); l.style.left=x+'px'; l.style.top=y+'px'; l.style.width=w+'px'; l.style.height='2px'; l.style.background=color; }
+function vLine(x,y,h,color){ const l=el('ln'); l.style.left=x+'px'; l.style.top=y+'px'; l.style.width='2px'; l.style.height=h+'px'; l.style.background=color; }
+
+// 7-segment digits (bit0=a top, b, c, d bottom, e, f, g middle) — same SEG table as EpdDashboard.cpp
+const SEG=[0x3F,0x06,0x5B,0x4F,0x66,0x6D,0x7D,0x07,0x7F,0x6F];
+function drawDigit(x,y,w,h,t,m){
+  const midY=y+(h-t)/2;
+  if(m&0x01) rect(x,y,w,t,C.ink,'seg');
+  if(m&0x02) rect(x+w-t,y,t,h/2,C.ink,'seg');
+  if(m&0x04) rect(x+w-t,y+h/2,t,h/2,C.ink,'seg');
+  if(m&0x08) rect(x,y+h-t,w,t,C.ink,'seg');
+  if(m&0x10) rect(x,y+h/2,t,h/2,C.ink,'seg');
+  if(m&0x20) rect(x,y,t,h/2,C.ink,'seg');
+  if(m&0x40) rect(x,midY,w,t,C.ink,'seg');
+}
+function drawBigPrice(x,y,h,s){
+  const w=h*0.58, t=h*0.13, gap=h*0.16; let cx=x;
+  for(const q of s){
+    if(q===','||q==='.'){ rect(cx,y+h-t,t,t,C.ink,'seg'); cx+=t+gap; }
+    else if(q>='0'&&q<='9'){ drawDigit(cx,y,w,h,t,SEG[+q]); cx+=w+gap; }
+    else cx+=w/2;
+  }
+  return cx;
+}
+function chart(bars,avg,liveIdx,x,y,w,h){
+  let maxP=0.0001; bars.forEach(b=>{ if(b.p>maxP)maxP=b.p; }); const top=maxP*1.12;
+  const n=bars.length, gap=2; let bw=Math.floor((w-(n-1)*gap)/n); if(bw<1)bw=1;
+  bars.forEach((b,i)=>{
+    let bh=Math.round((b.p/top)*h); if(bh<2)bh=2;
+    const bx=x+i*(bw+gap), by=y+h-bh;
+    rect(bx,by,bw,bh, b.p>=avg? C.dark : C.light);
+    if(i===liveIdx){ const r=el('ring'); r.style.left=(bx-1)+'px'; r.style.top=(by-1)+'px'; r.style.width=(bw+2)+'px'; r.style.height=(bh+2)+'px'; }
+  });
+  // dashed average line
+  const ay=y+h-Math.round((avg/top)*h);
+  for(let dx=x; dx<x+w; dx+=10){ const d=el('dash'); d.style.left=dx+'px'; d.style.top=ay+'px'; d.style.width='5px'; }
+}
+function extremes(lo,hi,x,y){
+  text(x,y,`▼ ${('0'+lo.h).slice(-2)}:00 ${fmt(lo.p)}     ▲ ${('0'+hi.h).slice(-2)}:00 ${fmt(hi.p)}`,1);
+}
+
+// ----- status bar -----
+text(M,10,'Pstryk  14:23',1);
+const bat='BAT 87%';
+text(W - textW(bat,1) - M, 10, bat, 1);
+const sy = 10 + LB + 6;
+hLine(M, sy, W-2*M, C.mid);
+
+// ----- hero -----
+const heroY = sy + 12;
+text(M, heroY, 'TERAZ 14:00', 2);
+const priceY = heroY + LH + 8, priceH = 150;
+const endx = drawBigPrice(M, priceY, priceH, '0,40');
+text(endx + 16, priceY + priceH - LH, 'zl/kWh', 2);
+const pillY = priceY + priceH + 16;
+const tag='ponizej sredniej';
+const pill = el('pill'); pill.style.left=M+'px'; pill.style.top=pillY+'px';
+pill.style.width=(textW(tag,1)+28)+'px'; pill.style.height=(LB+12)+'px';
+text(M+14, pillY+6, tag, 1);
+
+// hero right column
+const rx=580, ry=heroY, rstep=LB+12;
+vLine(rx-26, heroY, (pillY+LB)-heroY, C.mid);
+text(rx, ry,            'Nastepna 15:00:  0,48 ▲', 1);
+text(rx, ry+rstep,      'Sprzedaz PV:  0,31', 1);
+text(rx, ry+2*rstep,    'Srednia dzis:  0,55', 1);
+
+// ----- charts -----
+const cTitleY=320, half=Math.floor((W-3*M)/2), barsY=cTitleY+LH+6, barsH=110, mmY=barsY+barsH+8, rxc=M+half+M;
+text(M, cTitleY, 'Dzis', 2);
+chart(today, todayAvg, liveIndex, M, barsY, half, barsH);
+extremes({h:3,p:0.34},{h:19,p:0.95}, M, mmY);
+text(rxc, cTitleY, 'Jutro', 2);
+chart(tomorrow, tomorrowAvg, -1, rxc, barsY, half, barsH);
+extremes({h:3,p:0.33},{h:19,p:0.91}, rxc, mmY);
+</script>
+</body>
+</html>
