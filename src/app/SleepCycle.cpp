@@ -13,6 +13,7 @@
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <esp_sntp.h>
+#include <esp_attr.h>
 #include "driver/rtc_io.h"
 #include <sys/time.h>
 #include <cstdio>
@@ -34,6 +35,11 @@ static const int      PIN_BATT = 14;   // battery ADC (ADC2) via 2:1 divider
 static const uint8_t  PCF8563_ADDR = 0x51;
 static const int      I2C_SDA = 18, I2C_SCL = 17;
 static const time_t   kTimeValid = 1700000000;
+
+// Consecutive transient (network/parse) fetch failures, retained across deep sleep.
+// Lets a one-off cold-wake blip keep the last good e-paper image instead of wiping
+// it to an error screen; the error only surfaces after a sustained outage.
+RTC_DATA_ATTR static uint32_t g_consecFail = 0;
 
 static int bcd2dec(uint8_t b) { return (b >> 4) * 10 + (b & 0x0F); }
 static uint8_t dec2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
@@ -170,8 +176,18 @@ void SleepCycle::setup() {
     Window w = computeWindow(now);
     PstrykClient client(settings_.apiKey);
     PriceData data;
-    FetchResult res = client.fetch(w.start, w.end, data);
+    // In-cycle retry: a cold-wake TLS read timeout (HTTPClient -11) is transient and
+    // almost always clears on a fresh connection, so retry before drawing anything.
+    FetchResult res;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      res = client.fetch(w.start, w.end, data);
+      if (res.status == FetchStatus::Ok ||
+          res.status == FetchStatus::AuthError ||
+          res.status == FetchStatus::RateLimited) break;   // only retry Network/Parse
+      if (attempt < 2) delay(2500);                         // brief backoff between attempts
+    }
     if (res.status == FetchStatus::Ok) {
+      g_consecFail = 0;
       view = buildView(data, now);
       struct tm lt; localtime_r(&now, &lt);
       char clk[6]; std::snprintf(clk, sizeof(clk), "%02d:%02d", lt.tm_hour, lt.tm_min);
@@ -185,10 +201,16 @@ void SleepCycle::setup() {
       drawMessage(gfx_, "Limit zapytan", "Sprobuje pozniej");
       nextWake = res.retryAfterSec > 0 ? (uint32_t)res.retryAfterSec : 1200;
     } else {
-      struct tm lt; localtime_r(&now, &lt);
-      char l2[24]; std::snprintf(l2, sizeof(l2), "%02d:%02d", lt.tm_hour, lt.tm_min);
-      drawMessage(gfx_, "Blad pobierania", l2);
-      nextWake = 300;
+      // Transient network/parse error AFTER the in-cycle retries. The e-paper holds its
+      // last good image at zero power, so don't wipe it for a brief blip -- only surface
+      // the error after several consecutive failures. Short 60 s backoff (was 300 s).
+      g_consecFail++;
+      if (g_consecFail >= 3) {
+        struct tm lt; localtime_r(&now, &lt);
+        char l2[24]; std::snprintf(l2, sizeof(l2), "%02d:%02d", lt.tm_hour, lt.tm_min);
+        drawMessage(gfx_, "Blad pobierania", l2);
+      }
+      nextWake = 60;
     }
   } else {
     drawMessage(gfx_, "Brak Wi-Fi", "Sprobuje ponownie");
