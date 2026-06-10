@@ -23,7 +23,7 @@ static FetchResult attempt(const String& url, const String& authHeader, PriceDat
 
   HTTPClient https;
   https.setConnectTimeout(8000);
-  https.setTimeout(8000);
+  https.setTimeout(12000);   // cold-wake API responses can legitimately take >8 s; retried by caller
   if (!https.begin(client, url)) {
     r.status = FetchStatus::NetworkError;
     return r;
