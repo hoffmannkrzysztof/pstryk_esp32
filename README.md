@@ -235,6 +235,7 @@ Testy znajdują się w [`test/`](test) (m.in. `test_parse`, `test_logic`,
 
 ## Licencja i źródła
 
+- Projekt jest udostępniony na licencji **GNU AGPL v3.0** — patrz [`LICENSE`](LICENSE).
 - Wbudowany sterownik e-paper w [`lib/EPD47/`](lib/EPD47) pochodzi od LilyGo
   (oparty na [epdiy](https://github.com/vroland/epdiy)) i jest na licencji
   **GPLv3** — patrz [`lib/EPD47/LICENSE`](lib/EPD47/LICENSE).
