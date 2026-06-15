@@ -15,6 +15,16 @@ każda ma własną, cienką warstwę renderowania:
 
 ---
 
+## Więcej o projekcie
+
+Szczegóły projektu — historię powstania urządzenia oraz pierwszy wydruk 3D
+obudowy — można też przeczytać na blogu:
+
+- [Rzucasz okiem i wiesz, kiedy prąd jest tani — oto moja domowa „pogodynka cenowa" do Pstryka](https://kobieceinspiracje.pl/186155,rzucasz-okiem-i-wiesz-kiedy-prad-jest-tani-oto-moja-domowa-pogodynka-cenowa-do-pstryka.html)
+- [„Pogodynka cenowa" ma już obudowę — pierwszy wydruk 3D z białego PLA](https://kobieceinspiracje.pl/186216,pogodynka-cenowa-ma-juz-obudowe-pierwszy-wydruk-3d-z-bialego-pla.html)
+
+---
+
 ## Jak wygląda ekran
 
 > Poniższe obrazy to **wizualizacje wygenerowane z kodu układu ekranu**
