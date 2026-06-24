@@ -3,9 +3,15 @@
 .pioenvs/
 .piolibdeps/
 
+# CI-generated firmware version (see release.yml)
+src/core/FirmwareVersionGen.h
+
 # Secrets (if ever compiled-in instead of provisioned)
 src/secrets.h
 secrets.h
+
+# Never commit private keys (OTA signing key lives in a GitHub secret + offline backup)
+*.pem
 
 # Brainstorm visual-companion session files (not shipped)
 .superpowers/

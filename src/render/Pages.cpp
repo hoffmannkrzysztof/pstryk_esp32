@@ -1,5 +1,6 @@
 #include "render/Pages.h"
 #include "core/Format.h"
+#include "core/Version.h"
 #include <cstdio>
 #include <cstring>
 
@@ -141,6 +142,8 @@ void renderPage(IRenderer& r, Page page, const PriceView& v,
     case Page::Extremes: pageExtremes(r, p, v); break;
     case Page::Jutro:    pageJutro(r, p, v); break;
   }
+  const char* ver = "v" FIRMWARE_VERSION;
+  r.text(r.width() - r.textWidth(ver, 1) - 8, r.height() - 12, ver, p.muted, 1);
   r.present();
 }
 
@@ -149,6 +152,8 @@ void renderMessage(IRenderer& r, const char* line1, const char* line2) {
   r.clear(p.bg);
   r.text(16, 60, line1, p.text, 3);
   if (line2 && line2[0]) r.text(16, 110, line2, p.muted, 2);
+  const char* ver = "v" FIRMWARE_VERSION;
+  r.text(r.width() - r.textWidth(ver, 1) - 8, r.height() - 12, ver, p.muted, 1);
   r.present();
 }
 

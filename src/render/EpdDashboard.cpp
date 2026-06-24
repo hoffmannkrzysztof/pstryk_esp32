@@ -1,5 +1,6 @@
 #include "render/EpdDashboard.h"
 #include "core/Format.h"       // formatPln(float, char[8])
+#include "core/Version.h"
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -157,6 +158,7 @@ void drawDashboard(IRenderer& r, const PriceView& v, const EpdStatus& st) {
     r.text(rxc, barsY + barsH / 2 - LB / 2, "brak danych jeszcze", p.ink, 1);
   }
 
+  r.text(20, r.height() - 24, "v" FIRMWARE_VERSION, p.ink, 1);
   r.present();
 }
 
@@ -168,6 +170,7 @@ void drawMessage(IRenderer& r, const char* line1, const char* line2) {
   r.text((r.width() - r.textWidth(line1, 2)) / 2, y, line1, p.ink, 2);
   if (line2 && line2[0])
     r.text((r.width() - r.textWidth(line2, 1)) / 2, y + lh + 12, line2, p.ink, 1);
+  r.text(20, r.height() - 24, "v" FIRMWARE_VERSION, r.rgb(120, 120, 120), 1);
   r.present();
 }
 

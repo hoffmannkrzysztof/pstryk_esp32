@@ -31,6 +31,7 @@ class App {
   uint32_t nextFetchAtMs_ = 0;
   uint32_t nextRotateAtMs_ = 0;
   uint32_t lastRedrawMs_ = 0;
+  uint32_t nextOtaCheckAtMs_ = 0;
   int      pageIdx_ = 0;
 };
 
