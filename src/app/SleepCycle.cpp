@@ -3,6 +3,9 @@
 #include "render/EpdDashboard.h"
 #include "net/PstrykClient.h"
 #include "net/WiFiProvisioner.h"
+#include "net/OtaUpdater.h"
+#include "net/OtaRollback.h"
+#include "core/OtaPolicy.h"
 #include "core/TimeService.h"
 #include "core/PriceLogic.h"
 #include "core/RefreshPolicy.h"
@@ -40,6 +43,9 @@ static const time_t   kTimeValid = 1700000000;
 // Lets a one-off cold-wake blip keep the last good e-paper image instead of wiping
 // it to an error screen; the error only surfaces after a sustained outage.
 RTC_DATA_ATTR static uint32_t g_consecFail = 0;
+// Last OTA-manifest check (epoch s), retained across deep sleep so we poll GitHub
+// at most once/day per device rather than every wake.
+RTC_DATA_ATTR static uint32_t g_lastOtaCheck = 0;
 
 static int bcd2dec(uint8_t b) { return (b >> 4) * 10 + (b & 0x0F); }
 static uint8_t dec2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
@@ -114,6 +120,10 @@ void SleepCycle::setup() {
   timeServiceBegin();                 // install Warsaw TZ for mktime/localtime
   Wire.begin(I2C_SDA, I2C_SCL);
   if (!gfx_.begin()) { sleepFor(3600); return; }
+  // Reaching here means PSRAM + display init succeeded -> a just-OTA'd image is
+  // healthy enough to keep. Confirm now (before Wi-Fi) so a transient network blip
+  // on a later wake can't trigger a false rollback on this sleeping board.
+  confirmRunningImageValid();
 
   // Wake cause is intentionally not branched: a button (ext0) wake falls through
   // to a normal fetch+repaint (= short-press "refresh now"); a held button is
@@ -194,6 +204,13 @@ void SleepCycle::setup() {
       st.clockHHMM = clk;                       // local buffer lives until setup() returns
       drawDashboard(gfx_, view, st);            // 7) paint
       nextWake = secondsUntilNextWake(now, view.hasTomorrow);
+      // Opportunistic OTA: we're on a healthy connected cycle with Wi-Fi up and a
+      // good fetch. Rate-limited to once/day; runOnce() reboots into the new image
+      // on success and never returns.
+      if (dueForOtaCheck(g_lastOtaCheck, (uint32_t)now, 24u * 3600u)) {
+        g_lastOtaCheck = (uint32_t)now;
+        OtaUpdater().runOnce();
+      }
     } else if (res.status == FetchStatus::AuthError) {
       drawMessage(gfx_, "Blad klucza API", "Przytrzymaj przycisk, aby zmienic");
       nextWake = 1800;
