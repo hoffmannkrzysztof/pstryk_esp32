@@ -5,6 +5,8 @@
 #include "render/pins_config.h"
 #include <Arduino.h>
 #include <WiFi.h>
+#include "net/OtaUpdater.h"
+#include "net/OtaRollback.h"
 #include <cstdio>
 
 namespace pstryk {
@@ -31,6 +33,8 @@ void App::setup() {
     delay(3000);
     ESP.restart();
   }
+  // Display is up and Wi-Fi connected -> a just-OTA'd image is healthy; keep it.
+  confirmRunningImageValid();
 
   renderMessage(gfx_, "Czas", "Synchronizacja...");
   configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.google.com");
@@ -41,6 +45,7 @@ void App::setup() {
   uint32_t now = millis();
   nextRotateAtMs_ = now + kRotateMs;
   lastRedrawMs_ = 0;  // force immediate first redraw
+  nextOtaCheckAtMs_ = now + 6u * 60u * 60u * 1000u;   // first OTA check ~6 h after boot
 }
 
 void App::doFetch() {
@@ -113,6 +118,11 @@ void App::loop() {
   }
 
   if ((int32_t)(now - nextFetchAtMs_) >= 0) doFetch();
+
+  if ((int32_t)(now - nextOtaCheckAtMs_) >= 0) {
+    nextOtaCheckAtMs_ = now + 6u * 60u * 60u * 1000u;   // re-check every ~6 h
+    if (WiFi.status() == WL_CONNECTED) OtaUpdater().runOnce();  // reboots on update
+  }
 
   if ((int32_t)(now - nextRotateAtMs_) >= 0) {
     advancePage();
