@@ -28,6 +28,7 @@ void test_due_never_checked() { TEST_ASSERT_TRUE(dueForOtaCheck(0, 1000, 100)); 
 void test_due_within_interval() { TEST_ASSERT_FALSE(dueForOtaCheck(1000, 1050, 100)); }
 void test_due_past_interval() { TEST_ASSERT_TRUE(dueForOtaCheck(1000, 1200, 100)); }
 void test_due_no_clock() { TEST_ASSERT_FALSE(dueForOtaCheck(1000, 0, 100)); }
+void test_due_clock_backwards() { TEST_ASSERT_TRUE(dueForOtaCheck(2000, 1000, 100)); }
 
 int main(int, char**) {
   UNITY_BEGIN();
@@ -39,5 +40,6 @@ int main(int, char**) {
   RUN_TEST(test_due_within_interval);
   RUN_TEST(test_due_past_interval);
   RUN_TEST(test_due_no_clock);
+  RUN_TEST(test_due_clock_backwards);
   return UNITY_END();
 }
