@@ -5,8 +5,7 @@
 #include "core/OtaPolicy.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <Update.h>
-#include <SHA2Builder.h>
+#include <Update.h>  // pulls in Updater_Signing.h (UpdaterRSAVerifier, SHA2Builder) under UPDATE_SIGN
 
 namespace pstryk {
 
