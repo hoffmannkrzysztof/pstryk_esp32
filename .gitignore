@@ -10,6 +10,9 @@ src/core/FirmwareVersionGen.h
 src/secrets.h
 secrets.h
 
+# Never commit private keys (OTA signing key lives in a GitHub secret + offline backup)
+*.pem
+
 # Brainstorm visual-companion session files (not shipped)
 .superpowers/
 
