@@ -3,6 +3,9 @@
 .pioenvs/
 .piolibdeps/
 
+# CI-generated firmware version (see release.yml)
+src/core/FirmwareVersionGen.h
+
 # Secrets (if ever compiled-in instead of provisioned)
 src/secrets.h
 secrets.h
