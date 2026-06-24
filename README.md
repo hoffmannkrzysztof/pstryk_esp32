@@ -191,6 +191,43 @@ Aby zmienić konfigurację później:
 
 ---
 
+## Aktualizacje OTA (over-the-air)
+
+Po wgraniu pierwszej wersji przez USB urządzenia same pobierają kolejne
+aktualizacje z GitHub Releases — cicho, w tle, z weryfikacją podpisu i
+automatycznym wycofaniem (rollback) wadliwego obrazu.
+
+- **Płyta e-paper (T5):** sprawdza aktualizacje maksymalnie raz na dobę, przy
+  okazji udanego cyklu pobierania cen.
+- **Płyta AMOLED (T-Display-Long):** sprawdza co ok. 6 godzin.
+- Wersja firmware jest widoczna w rogu ekranu (`vX.Y.Z`); `v0.0.0-dev` oznacza
+  lokalny build, który **nie** aktualizuje się sam.
+
+### Jednorazowa migracja płyty AMOLED
+
+Starsze buildy AMOLED używały układu partycji `huge_app.csv` z **jedną** partycją
+aplikacji — OTA jest tam niemożliwe. Aby włączyć OTA, wgraj **raz, przez USB**,
+nową wersję (która używa `default_16MB.csv`). Od tego momentu kolejne
+aktualizacje pójdą już przez OTA. Płyta e-paper nie wymaga tego kroku.
+
+### Wydawanie nowej wersji (dla maintainera)
+
+1. Otaguj commit sem-ver tagiem, np. `git tag v1.4.0 && git push origin v1.4.0`.
+2. CI (`.github/workflows/release.yml`) zbuduje obie płyty, podpisze binaria
+   kluczem prywatnym z sekretu `OTA_SIGNING_KEY` i opublikuje release z plikami
+   `firmware-<board>.bin` oraz `manifest-<board>.json`.
+3. Urządzenia pobiorą `…/releases/latest/download/manifest-<board>.json` i
+   zaktualizują się, jeśli wersja w manifeście jest nowsza.
+
+### Klucz podpisu
+
+Obrazy są podpisywane RSA-3072/SHA-256. Klucz **publiczny** jest wkompilowany w
+firmware (`src/net/ota_public_key.h`). Klucz **prywatny** istnieje wyłącznie w
+sekrecie `OTA_SIGNING_KEY` i offline. Utrata klucza = brak możliwości wydawania
+aktualizacji; wyciek = ktoś może podpisać firmware, które urządzenia zaakceptują.
+
+---
+
 ## Strategia odświeżania (bezpieczna dla limitu API)
 
 Jedno zapytanie na odświeżenie pobiera okno **dziś 00:00 → +48 h** (od razu łapie
