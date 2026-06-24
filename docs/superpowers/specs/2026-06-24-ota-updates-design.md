@@ -47,21 +47,31 @@ minimal-dependency style.
 
 ## 3. Architecture & components
 
-### New (board-agnostic, unit-testable in the `native` env)
-- **`src/core/Version.h`** — `FIRMWARE_VERSION` (injected at build via `-D`,
-  defaults to `"0.0.0-dev"` locally), `BOARD_ID` (`"epaper"` / `"amoled"`, derived
-  from the existing `PSTRYK_BOARD_EPAPER` define), and `bool isNewer(const char* a,
-  const char* b)` semver compare. Pure logic.
-- **`src/net/OtaManifest.{h,cpp}`** — `struct OtaManifest { String version, url,
-  sha256, board; size_t size; }` + `bool parseManifest(const char* json,
-  OtaManifest& out)` using ArduinoJson, mirroring `PstrykParse`. Pure logic.
-- **`src/net/OtaUpdater.{h,cpp}`** — orchestration. Pure decision helpers
-  (`shouldUpdate(manifest, currentVersion, boardId)`, rate-limit gate) are
-  separated from the hardware path so they are testable. Hardware path:
-  fetch manifest over HTTPS → gate → stream `.bin` through `Update` with
-  appended-signature verification → set boot partition → reboot.
-- **`src/net/ota_public_key.h`** — compiled-in PEM public key (PROGMEM). Generated
-  once; the matching private key lives only in CI secrets and offline backup.
+### New components
+*(Pure logic lives in `core/` and is unit-tested in the `native` env; `net/` is device-only.)*
+- **`src/core/Version.{h,cpp}`** — `FIRMWARE_VERSION` (injected at build via a
+  CI-generated `core/FirmwareVersionGen.h`, defaults to `"0.0.0-dev"` locally),
+  `PSTRYK_BOARD_ID` (`"epaper"` / `"amoled"`, from the `PSTRYK_BOARD_EPAPER` define),
+  `isNewer(a, b)` semver compare, and `isDevVersion(v)`. Pure logic, native-tested.
+- **`src/core/OtaManifest.{h,cpp}`** — `struct OtaManifest { std::string version,
+  url, sha256, board; unsigned long size; }` + `bool parseManifest(const char* json,
+  OtaManifest& out)` using ArduinoJson, mirroring `PstrykParse`. Pure logic, native-tested.
+- **`src/core/OtaPolicy.{h,cpp}`** — `shouldApplyUpdate(manifest, currentVersion,
+  boardId)` (board match + dev-guard + strict-newer) and `dueForOtaCheck(...)` rate
+  limit. Pure logic, native-tested.
+- **`src/net/OtaUpdater.{h,cpp}`** (device-only) — orchestration using the pure
+  `core/` helpers: fetch manifest over HTTPS → `shouldApplyUpdate` gate → stream
+  `.bin` through `Update` with appended-signature verification → reboot (the new
+  image boots as `PENDING_VERIFY`).
+- **`src/net/OtaRollback.{h,cpp}`** (device-only) — overrides arduino-esp32's weak
+  `verifyRollbackLater()` (returns true, so the core does not auto-confirm a pending
+  image) and provides `confirmRunningImageValid()` to mark the image valid after a
+  health check. Uses `CONFIG_APP_ROLLBACK_ENABLE=y` (on in the stock S3 build;
+  `ANTI_ROLLBACK` off → no eFuse burning).
+- **`src/net/ota_public_key.h`** (device-only) — compiled-in RSA-3072 public key as
+  PEM bytes + a trailing NUL (required by `mbedtls_pk_parse_public_key`). Generated
+  once; the matching private key lives only in the `OTA_SIGNING_KEY` CI secret + an
+  offline backup.
 
 ### Changed
 - **`src/app/SleepCycle.cpp`** (e-paper) — after a successful fetch+paint, WiFi
@@ -105,7 +115,8 @@ single call site per board. The render layer reads `FIRMWARE_VERSION` directly
 ## 5. Versioning, CI & release pipeline
 
 - **Version source:** semver git tags (`v1.4.0`). Local/dev builds default to
-  `"0.0.0-dev"`, which is never newer than a release → dev boards never self-update.
+  `"0.0.0-dev"`; `shouldApplyUpdate()` excludes any version containing `-dev`, so a
+  dev board never self-updates regardless of how new a release is.
 - **Build:** `release.yml` triggers on `v*` tags; runs `pio run -e t5_epaper_s3`
   and `pio run -e tdisplay_long`.
 - **Sign:** each `.bin` signed with the private key (GitHub Actions secret);
@@ -151,7 +162,10 @@ single call site per board. The render layer reads `FIRMWARE_VERSION` directly
 - OTA check rides an already-successful connected wake, rate-limited to once / 24 h
   via an `RTC_DATA_ATTR` timestamp. A download is a few seconds of radio,
   infrequent → negligible battery impact.
-- Self-test for rollback-validate reuses the cycle's existing WiFi + fetch.
+- Rollback self-test confirms the image right after display/PSRAM init succeeds
+  (before Wi-Fi), so a transient network blip on a later wake can't trigger a false
+  rollback on this sleeping board; a build that crashes during boot never reaches the
+  confirm call and is rolled back.
 
 ### T-Display-S3-Long (AMOLED)
 - Currently `huge_app.csv` — a **single** app slot, so OTA is impossible as-is.
