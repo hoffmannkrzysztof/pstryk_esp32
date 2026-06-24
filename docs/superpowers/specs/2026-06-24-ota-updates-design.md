@@ -107,10 +107,15 @@ single call site per board. The render layer reads `FIRMWARE_VERSION` directly
 8. `Update` verifies the appended signature against the compiled-in public key.
    Invalid → abort, keep running.
 9. Valid → set the boot partition to the new slot and reboot.
-10. The new firmware boots and runs a **self-test** (WiFi connects + one successful
-    price fetch). On pass it calls `esp_ota_mark_app_valid_cancel_rollback()`. If it
-    crashes or never reaches that point, the bootloader reverts to the previous slot
-    on the next reset.
+10. The new firmware boots and, once core subsystems prove healthy, calls
+    `esp_ota_mark_app_valid_cancel_rollback()` — e-paper: right after display/PSRAM
+    init, before Wi-Fi (so a transient network blip on a later wake can't cause a
+    false rollback on the sleeping board); AMOLED: right after the first Wi-Fi
+    connect. If the new image crashes or resets before reaching that point, the
+    bootloader reverts to the previous slot on the next reset. Confirmation is
+    deliberately **not** gated on a successful price fetch: on the always-on AMOLED a
+    fetch failure never triggers a reset, so gating on it would give no rollback
+    benefit while risking a false rollback of a working-but-API-degraded image.
 
 ## 5. Versioning, CI & release pipeline
 
@@ -175,6 +180,14 @@ single call site per board. The render layer reads `FIRMWARE_VERSION` directly
   cannot add a second app slot over-the-air while the firmware occupies the only
   one). **Must be documented** in the README and the first release notes.
 - Always-on + always-connected → the periodic check is trivial in `loop()`.
+- **Rollback caveat:** if a bad new image cannot connect Wi-Fi, `WiFiManager`
+  (`setConfigPortalTimeout(0)`) parks it in the captive portal indefinitely, so it
+  never resets and the bootloader's next-reset rollback does not fire on its own — a
+  manual power-cycle rolls it back. This is the pre-existing Wi-Fi-failure behaviour,
+  not an OTA regression, but it is the weakest point of AMOLED auto-rollback. Verify
+  both a forced-bad-boot AND a bad-Wi-Fi image recover during on-device testing
+  (§10 / plan Task 15); a bounded portal timeout on a `PENDING_VERIFY` boot is a
+  recommended follow-up hardening.
 
 ### Wrong-board guard
 The per-board manifest URL is the primary guard; the manifest also carries `board`,

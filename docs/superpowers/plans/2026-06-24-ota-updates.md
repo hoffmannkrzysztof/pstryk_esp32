@@ -1229,6 +1229,10 @@ Expected: serial log shows `OTA failed` with `UPDATE_ERROR_SIGN`; the device kee
 Build a deliberately broken release (e.g., add an early `abort();` in `setup()` after display init but before `confirmRunningImageValid()`), sign it, publish it as `v1.2.0`, and let a board update to it.
 Expected: the broken image boots once, fails to reach the confirm call, and on the next reset the bootloader rolls back; the board returns to `v1.1.0` and keeps running. Remove the broken build / publish a fixed `v1.2.1` afterward.
 
+- [ ] **Step 6b: AMOLED bad-Wi-Fi image (HARD GATE)**
+
+The AMOLED board confirms the image right after the first Wi-Fi connect, and `WiFiManager` parks a connection failure in the captive portal indefinitely (no reset → bootloader rollback never fires on its own). Verify the recovery story for an AMOLED image that boots but cannot connect Wi-Fi: publish a signed build that forces a Wi-Fi-connect failure (e.g., temporarily corrupt the saved SSID path), let an AMOLED board update to it, and confirm that a **manual power-cycle rolls it back** to the previous good version (it should, because the un-confirmed `PENDING_VERIFY` image reverts on reset). If power-cycle recovery is unacceptable for distribution, implement the bounded-portal-timeout-on-`PENDING_VERIFY` hardening (reboot → rollback after N s of failed connect) before public release. This is the weakest point of AMOLED auto-rollback (see spec §7) — treat it as a gate.
+
 - [ ] **Step 7: Record results**
 
 Note pass/fail for each step in the PR description. All must pass before relying on OTA for distribution.
