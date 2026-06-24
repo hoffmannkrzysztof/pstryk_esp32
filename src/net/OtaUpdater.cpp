@@ -24,7 +24,12 @@ OtaResult OtaUpdater::runOnce() {
   mHttp.setConnectTimeout(8000);
   mHttp.setTimeout(12000);
   if (!mHttp.begin(mClient, manifestUrl)) return OtaResult::FetchError;
-  if (mHttp.GET() != HTTP_CODE_OK) { mHttp.end(); return OtaResult::FetchError; }
+  int mCode = mHttp.GET();
+  if (mCode != HTTP_CODE_OK) {
+    log_e("OTA manifest fetch failed: %d", mCode);
+    mHttp.end();
+    return OtaResult::FetchError;
+  }
   String body = mHttp.getString();
   mHttp.end();
   if (body.isEmpty()) return OtaResult::FetchError;
@@ -44,19 +49,31 @@ OtaResult OtaUpdater::runOnce() {
   fHttp.setConnectTimeout(8000);
   fHttp.setTimeout(20000);
   if (!fHttp.begin(fClient, String(m.url.c_str()))) return OtaResult::FetchError;
-  if (fHttp.GET() != HTTP_CODE_OK) { fHttp.end(); return OtaResult::FetchError; }
-  int total = fHttp.getSize();
-  if (total <= 0) { fHttp.end(); return OtaResult::FetchError; }
+  int fCode = fHttp.GET();
+  if (fCode != HTTP_CODE_OK) {
+    log_e("OTA firmware fetch failed: %d", fCode);
+    fHttp.end();
+    return OtaResult::FetchError;
+  }
+  int contentLen = fHttp.getSize();
+  if (contentLen <= 0) { fHttp.end(); return OtaResult::FetchError; }
+  size_t total = (size_t)contentLen;
 
   // 4) Install signature verification BEFORE begin(); begin() takes the TOTAL size
   //    (firmware + appended signature). end() performs the verification.
   UpdaterRSAVerifier verifier(PUBLIC_KEY, PUBLIC_KEY_LEN, HASH_SHA256);
   if (!Update.installSignature(&verifier)) { fHttp.end(); return OtaResult::VerifyError; }
-  if (!Update.begin((size_t)total)) { fHttp.end(); return OtaResult::FlashError; }
+  if (!Update.begin(total)) { fHttp.end(); return OtaResult::FlashError; }
 
-  size_t written = Update.writeStream(*fHttp.getStreamPtr());
+  NetworkClient* stream = fHttp.getStreamPtr();
+  if (!stream) { fHttp.end(); return OtaResult::FetchError; }
+  size_t written = Update.writeStream(*stream);
   fHttp.end();
-  if (written != (size_t)total) { Update.abort(); return OtaResult::FlashError; }
+  if (written != total) {
+    log_e("OTA write incomplete: %u/%u bytes", (unsigned)written, (unsigned)total);
+    Update.abort();
+    return OtaResult::FlashError;
+  }
 
   if (!Update.end()) {
     OtaResult r = (Update.getError() == UPDATE_ERROR_SIGN)
