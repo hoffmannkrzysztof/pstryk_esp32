@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-sign-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install PlatformIO and signing deps
+        run: pip install --upgrade platformio cryptography
+
+      - name: Derive version
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ver=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Inject firmware version
+        env:
+          VER: ${{ steps.ver.outputs.ver }}
+        run: printf '#define FIRMWARE_VERSION "%s"\n' "$VER" > src/core/FirmwareVersionGen.h
+
+      - name: Build both boards
+        run: |
+          pio run -e t5_epaper_s3
+          pio run -e tdisplay_long
+
+      - name: Fetch signing tool
+        run: curl -fsSL https://raw.githubusercontent.com/espressif/arduino-esp32/master/tools/bin_signing.py -o bin_signing.py
+
+      - name: Restore signing key
+        run: printf '%s' "${{ secrets.OTA_SIGNING_KEY }}" > private_key.pem
+
+      - name: Extract public key (for self-verify)
+        run: python bin_signing.py --extract-pubkey private_key.pem --out public_key.pem
+
+      - name: Sign, verify, and write manifests
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VER: ${{ steps.ver.outputs.ver }}
+        run: |
+          set -euo pipefail
+          sign_board () {
+            env="$1"; board="$2"
+            python bin_signing.py --bin ".pio/build/$env/firmware.bin" --key private_key.pem --out "firmware-$board.bin"
+            python bin_signing.py --verify "firmware-$board.bin" --pubkey public_key.pem
+            size=$(stat -c%s "firmware-$board.bin")
+            sha=$(sha256sum "firmware-$board.bin" | cut -d' ' -f1)
+            printf '{"board":"%s","version":"%s","url":"https://github.com/%s/releases/download/%s/firmware-%s.bin","size":%s,"sha256":"%s"}\n' \
+              "$board" "$VER" "$REPO" "$TAG" "$board" "$size" "$sha" > "manifest-$board.json"
+          }
+          sign_board t5_epaper_s3 epaper
+          sign_board tdisplay_long amoled
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            firmware-epaper.bin
+            firmware-amoled.bin
+            manifest-epaper.json
+            manifest-amoled.json
+
+      - name: Scrub key material
+        if: always()
+        run: rm -f private_key.pem public_key.pem
