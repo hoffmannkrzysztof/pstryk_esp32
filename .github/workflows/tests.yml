@@ -34,3 +34,32 @@ jobs:
 
       - name: Run native unit tests
         run: pio test -e native
+
+  device-builds:
+    name: Device firmware builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cache the whole ~/.platformio (platform + toolchain), keyed on platformio.ini
+      # so a platform-pin change correctly invalidates it. This is the clean-env build
+      # that catches toolchain drift (e.g. an unpinned platform resolving the wrong
+      # arduino-esp32 core) on the PR instead of at release time.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+          key: ${{ runner.os }}-pio-device-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-device-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build both boards
+        run: pio run -e t5_epaper_s3 -e tdisplay_long
