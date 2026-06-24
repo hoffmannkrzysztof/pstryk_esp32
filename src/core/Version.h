@@ -1,5 +1,4 @@
 #pragma once
-#include <cstddef>
 
 // CI writes core/FirmwareVersionGen.h (#define FIRMWARE_VERSION "x.y.z") from the
 // git tag (see .github/workflows/release.yml). Absent in local/dev builds, where

@@ -18,6 +18,8 @@ void test_dev_is_dev() {
   TEST_ASSERT_TRUE(isDevVersion(nullptr));
 }
 void test_release_not_dev() { TEST_ASSERT_FALSE(isDevVersion("1.0.0")); }
+void test_bare_zero_not_dev() { TEST_ASSERT_FALSE(isDevVersion("0.0.0")); }
+void test_mixed_prefix() { TEST_ASSERT_TRUE(isNewer("v1.2.0", "1.1.0")); }
 
 int main(int, char**) {
   UNITY_BEGIN();
@@ -29,5 +31,7 @@ int main(int, char**) {
   RUN_TEST(test_leading_v_ignored);
   RUN_TEST(test_dev_is_dev);
   RUN_TEST(test_release_not_dev);
+  RUN_TEST(test_bare_zero_not_dev);
+  RUN_TEST(test_mixed_prefix);
   return UNITY_END();
 }

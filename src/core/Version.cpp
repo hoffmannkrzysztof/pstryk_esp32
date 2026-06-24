@@ -30,7 +30,7 @@ bool isNewer(const char* candidate, const char* current) {
 
 bool isDevVersion(const char* v) {
   if (!v || !*v) return true;
-  return std::strstr(v, "-dev") != nullptr || std::strcmp(v, "0.0.0") == 0;
+  return std::strstr(v, "-dev") != nullptr;
 }
 
 }  // namespace pstryk
