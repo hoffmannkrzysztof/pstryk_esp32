@@ -16,6 +16,9 @@ class SleepCycle {
   bool rtcRead(time_t& outLocalEpoch);   // PCF8563 -> epoch (false if invalid)
   void rtcWrite(time_t localEpoch);      // epoch -> PCF8563
   void sleepFor(uint32_t seconds);       // arm timer + button wake, deep sleep
+#ifdef PSTRYK_OTA_BOOTSTRAP
+  void runBootstrap();                   // installer build: provision, force-install latest, reboot
+#endif
 
   EpdRenderer gfx_;
   Settings    settings_;
