@@ -13,7 +13,7 @@ namespace pstryk {
 static const char* kManifestBase =
     "https://github.com/hoffmannkrzysztof/pstryk_esp32/releases/latest/download/manifest-";
 
-OtaResult OtaUpdater::runOnce() {
+OtaResult OtaUpdater::runOnce(bool force) {
   // 1) Fetch this board's manifest.
   String manifestUrl = String(kManifestBase) + PSTRYK_BOARD_ID + ".json";
   WiFiClientSecure mClient;
@@ -36,9 +36,18 @@ OtaResult OtaUpdater::runOnce() {
   OtaManifest m;
   if (!parseManifest(body.c_str(), m)) return OtaResult::ParseError;
 
-  // 2) Decision gate (pure, unit-tested).
-  if (!shouldApplyUpdate(m, FIRMWARE_VERSION, PSTRYK_BOARD_ID)) return OtaResult::NoUpdate;
-  log_i("OTA: updating %s -> %s", FIRMWARE_VERSION, m.version.c_str());
+  // 2) Decision gate. force=true (bootstrap) skips the version/dev gate but still
+  //    requires the manifest to target THIS board; the signature is verified later
+  //    regardless, so a forced install is still safe.
+  if (force) {
+    if (m.board != PSTRYK_BOARD_ID) {
+      log_e("OTA: manifest board '%s' != '%s'", m.board.c_str(), PSTRYK_BOARD_ID);
+      return OtaResult::NoUpdate;
+    }
+  } else if (!shouldApplyUpdate(m, FIRMWARE_VERSION, PSTRYK_BOARD_ID)) {
+    return OtaResult::NoUpdate;
+  }
+  log_i("OTA: %s %s -> %s", force ? "installing" : "updating", FIRMWARE_VERSION, m.version.c_str());
 
   // 3) Download the signed image.
   WiFiClientSecure fClient;

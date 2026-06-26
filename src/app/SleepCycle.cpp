@@ -113,6 +113,26 @@ void SleepCycle::sleepFor(uint32_t seconds) {
   esp_deep_sleep_start();
 }
 
+#ifdef PSTRYK_OTA_BOOTSTRAP
+// Installer image: provision Wi-Fi (+ API key, saved to NVS for the real firmware),
+// then force-install the latest signed release for this board and reboot into it.
+// OtaUpdater::runOnce(force=true) reboots on success; on failure we show a message
+// and retry on the next wake.
+void SleepCycle::runBootstrap() {
+  settings_.load();
+  drawMessage(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
+  WiFiProvisioner prov;
+  if (!prov.ensureConnected(settings_, /*forcePortal=*/!settings_.isComplete())) {
+    drawMessage(gfx_, "Brak Wi-Fi", "Sprobuje ponownie");
+    sleepFor(60);
+    return;
+  }
+  OtaUpdater().runOnce(/*force=*/true);  // reboots into the installed release on success
+  drawMessage(gfx_, "Blad instalacji", "Sprobuje ponownie");  // only reached on failure
+  sleepFor(60);
+}
+#endif
+
 void SleepCycle::setup() {
   Serial.begin(115200);
   delay(100);
@@ -124,6 +144,11 @@ void SleepCycle::setup() {
   // healthy enough to keep. Confirm now (before Wi-Fi) so a transient network blip
   // on a later wake can't trigger a false rollback on this sleeping board.
   confirmRunningImageValid();
+
+#ifdef PSTRYK_OTA_BOOTSTRAP
+  runBootstrap();   // installer image: fetch+flash the latest release, reboot into it
+  return;
+#endif
 
   // Wake cause is intentionally not branched: a button (ext0) wake falls through
   // to a normal fetch+repaint (= short-press "refresh now"); a held button is

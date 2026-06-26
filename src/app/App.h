@@ -18,6 +18,9 @@ class App {
   void doFetch();
   void advancePage();
   void redraw();
+#ifdef PSTRYK_OTA_BOOTSTRAP
+  void runBootstrap();   // installer build: provision, force-install latest, reboot
+#endif
 
   LongRenderer    gfx_;
   Settings        settings_;

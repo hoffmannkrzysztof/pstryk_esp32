@@ -19,6 +19,24 @@ static const time_t   kTimeValid = 1700000000;  // sanity threshold for a synced
 // Pages in rotation order; Jutro is skipped unless tomorrow is held.
 static const Page kPages[] = {Page::Teraz, Page::Chart, Page::Extremes, Page::Jutro};
 
+#ifdef PSTRYK_OTA_BOOTSTRAP
+// Installer image: provision Wi-Fi (+ API key into NVS for the real firmware), then
+// force-install the latest signed release for this board and reboot into it. On any
+// failure it shows a message and restarts to retry.
+void App::runBootstrap() {
+  renderMessage(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
+  if (!provisioner_.ensureConnected(settings_, /*forcePortal=*/!settings_.isComplete())) {
+    renderMessage(gfx_, "WiFi", "Blad polaczenia");
+    delay(3000);
+    ESP.restart();
+  }
+  OtaUpdater().runOnce(/*force=*/true);  // reboots into the installed release on success
+  renderMessage(gfx_, "Blad instalacji", "Sprobuje za chwile");  // only reached on failure
+  delay(10000);
+  ESP.restart();
+}
+#endif
+
 void App::setup() {
   Serial.begin(115200);
   delay(200);
@@ -26,6 +44,11 @@ void App::setup() {
   renderMessage(gfx_, "Pstryk", "Uruchamianie...");
 
   settings_.load();
+
+#ifdef PSTRYK_OTA_BOOTSTRAP
+  runBootstrap();   // installer image: fetch+flash the latest release, reboot into it
+  return;
+#endif
 
   renderMessage(gfx_, "WiFi", "Laczenie / konfiguracja...");
   if (!provisioner_.ensureConnected(settings_, /*forcePortal=*/false)) {

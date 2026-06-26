@@ -203,6 +203,24 @@ automatycznym wycofaniem (rollback) wadliwego obrazu.
 - Wersja firmware jest widoczna w rogu ekranu (`vX.Y.Z`); `v0.0.0-dev` oznacza
   lokalny build, który **nie** aktualizuje się sam.
 
+### Czysta płytka — obraz instalatora (bootstrap)
+
+Żeby postawić **czystą płytkę** od zera bez ręcznego wstrzykiwania wersji, wgraj
+jednorazowo obraz instalatora. Przy pierwszym starcie poprosi o Wi-Fi i klucz API
+(captive portal `Pstryk-Setup`), a potem sam pobierze, zweryfikuje podpis i
+zainstaluje **najnowszy** release dla swojej płyty — po czym zrestartuje się już w
+docelowym, wersjonowanym firmwarze (i dalej łapie OTA normalnie):
+
+```bash
+pio run -e t5_epaper_s3_bootstrap  -t upload   # e-paper
+pio run -e tdisplay_long_bootstrap -t upload   # AMOLED
+```
+
+Instalator pomija bramkę wersji (instaluje najnowsze niezależnie od tego, co ma na
+pokładzie), ale **dalej weryfikuje podpis i zgodność płyty** — nie wgra
+niepodpisanego ani cudzego obrazu. Zwykłe lokalne buildy (`-e t5_epaper_s3`)
+pozostają chronione: jako `0.0.0-dev` nie aktualizują się same.
+
 ### Jednorazowa migracja płyty AMOLED
 
 Starsze buildy AMOLED używały układu partycji `huge_app.csv` z **jedną** partycją
