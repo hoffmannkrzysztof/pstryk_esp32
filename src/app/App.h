@@ -35,6 +35,7 @@ class App {
   uint32_t nextRotateAtMs_ = 0;
   uint32_t lastRedrawMs_ = 0;
   uint32_t nextOtaCheckAtMs_ = 0;
+  uint32_t failCount_ = 0;       // consecutive network/parse fetch failures (drives backoff)
   int      pageIdx_ = 0;
 };
 
