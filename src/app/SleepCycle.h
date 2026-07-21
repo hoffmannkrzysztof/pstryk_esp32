@@ -12,7 +12,7 @@ class SleepCycle {
 
  private:
   bool buttonHeld(uint32_t ms);          // true if BTN held for >= ms
-  int  readBatteryPercent(bool& low);    // reads GPIO14 (call before Wi-Fi)
+  int  readBatteryPercent(bool& low, float& volts);  // reads GPIO14 (call before Wi-Fi)
   bool rtcRead(time_t& outLocalEpoch);   // PCF8563 -> epoch (false if invalid)
   void rtcWrite(time_t localEpoch);      // epoch -> PCF8563
   void sleepFor(uint32_t seconds);       // arm timer + button wake, deep sleep
