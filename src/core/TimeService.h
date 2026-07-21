@@ -14,4 +14,8 @@ int    localHour(time_t utc);              // 0..23 in Europe/Warsaw
 int    localDayOrdinal(time_t utc);        // days since 1970-01-01 of the LOCAL date
 time_t localMidnightUtc(time_t utc);       // 00:00 local of utc's day, as UTC epoch
 
+// True when the CET/CEST flag flips inside [utc-margin, utc+margin] -- i.e. a DST
+// switch is near and a wall-clock-only source (the PCF8563) is ambiguous/skewed.
+bool   dstChangesWithin(time_t utc, long marginSec);
+
 }  // namespace pstryk

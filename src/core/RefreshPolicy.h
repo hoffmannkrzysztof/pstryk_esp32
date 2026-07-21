@@ -25,4 +25,18 @@ uint32_t secondsUntilNextWake(time_t now, bool hasTomorrow);
 // the first retry quick but converges to one attempt per hour.
 uint32_t backoffSeconds(uint32_t consecFails);
 
+// What the RTC-retained price cache can say about the current wake.
+struct RtcCacheView {
+  bool coversNow = false;    // a cached frame contains `now`
+  bool hasTomorrow = false;  // cached frames include `now`'s local tomorrow
+};
+
+// Radio-free-wake gate: day-ahead prices are immutable once published, so a wake
+// whose hour is already cached can render and go back to sleep without Wi-Fi.
+// Network is required for: a button wake (user asked for fresh data), a cache
+// miss, the afternoon tomorrow-hunt, a >24 h old NTP sync (RTC drift check), a
+// due OTA-manifest check, and the ambiguous hours around a DST switch.
+bool needsNetwork(time_t now, bool buttonWake, RtcCacheView cache,
+                  uint32_t ntpAgeSec, bool otaDue);
+
 }  // namespace pstryk

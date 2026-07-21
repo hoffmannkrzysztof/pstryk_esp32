@@ -52,4 +52,12 @@ time_t localMidnightUtc(time_t utc) {
   return mktime(&l);
 }
 
+bool dstChangesWithin(time_t utc, long marginSec) {
+  struct tm a, b;
+  time_t before = utc - marginSec, after = utc + marginSec;
+  localtime_r(&before, &a);
+  localtime_r(&after, &b);
+  return a.tm_isdst != b.tm_isdst;
+}
+
 }  // namespace pstryk

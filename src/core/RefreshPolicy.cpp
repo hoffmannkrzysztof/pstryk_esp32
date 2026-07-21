@@ -32,4 +32,14 @@ uint32_t backoffSeconds(uint32_t consecFails) {
   return s > 3600u ? 3600u : s;
 }
 
+bool needsNetwork(time_t now, bool buttonWake, RtcCacheView cache,
+                  uint32_t ntpAgeSec, bool otaDue) {
+  if (buttonWake || otaDue) return true;
+  if (!cache.coversNow) return true;
+  if (ntpAgeSec > 24u * 3600u) return true;            // let NTP re-discipline the RTC daily
+  if (localHour(now) >= 12 && !cache.hasTomorrow) return true;   // tomorrow-hunt
+  if (dstChangesWithin(now, 2 * 3600)) return true;    // RTC wall clock ambiguous here
+  return false;
+}
+
 }  // namespace pstryk
