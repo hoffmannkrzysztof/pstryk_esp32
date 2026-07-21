@@ -79,6 +79,57 @@ void test_backoff_huge_counter_does_not_overflow() {
   TEST_ASSERT_EQUAL_UINT32(3600u, backoffSeconds(0xFFFFFFFFu));
 }
 
+// --- needsNetwork: the radio-free-wake gate for the RTC price cache ---
+
+static RtcCacheView goodCache() {
+  RtcCacheView c; c.coversNow = true; c.hasTomorrow = true; return c;
+}
+
+void test_cache_hit_morning_wake_is_radio_free() {
+  time_t now = parseIso8601Utc("2026-06-02T07:30:00Z");  // 09:30 local
+  RtcCacheView c = goodCache(); c.hasTomorrow = false;   // morning: tomorrow not needed
+  TEST_ASSERT_FALSE(needsNetwork(now, false, c, 3600u, false));
+}
+
+void test_button_wake_forces_network() {
+  time_t now = parseIso8601Utc("2026-06-02T07:30:00Z");
+  TEST_ASSERT_TRUE(needsNetwork(now, true, goodCache(), 3600u, false));
+}
+
+void test_cache_miss_forces_network() {
+  time_t now = parseIso8601Utc("2026-06-02T07:30:00Z");
+  RtcCacheView c; c.coversNow = false; c.hasTomorrow = false;
+  TEST_ASSERT_TRUE(needsNetwork(now, false, c, 3600u, false));
+}
+
+void test_due_ota_check_forces_network() {
+  time_t now = parseIso8601Utc("2026-06-02T07:30:00Z");
+  TEST_ASSERT_TRUE(needsNetwork(now, false, goodCache(), 3600u, true));
+}
+
+void test_stale_ntp_forces_network() {
+  time_t now = parseIso8601Utc("2026-06-02T07:30:00Z");
+  TEST_ASSERT_TRUE(needsNetwork(now, false, goodCache(), 25u * 3600u, false));
+}
+
+void test_afternoon_without_tomorrow_hunts_online() {
+  time_t now = parseIso8601Utc("2026-06-02T10:30:00Z");  // 12:30 local
+  RtcCacheView c = goodCache(); c.hasTomorrow = false;
+  TEST_ASSERT_TRUE(needsNetwork(now, false, c, 3600u, false));
+}
+
+void test_afternoon_with_tomorrow_stays_radio_free() {
+  time_t now = parseIso8601Utc("2026-06-02T10:30:00Z");  // 12:30 local
+  TEST_ASSERT_FALSE(needsNetwork(now, false, goodCache(), 3600u, false));
+}
+
+void test_dst_switch_window_forces_network() {
+  // Second 02:xx of the 25 h day: the RTC-only local clock is ambiguous here,
+  // so NTP must arbitrate even though the cache covers the hour.
+  time_t now = parseIso8601Utc("2026-10-25T00:30:00Z");
+  TEST_ASSERT_TRUE(needsNetwork(now, false, goodCache(), 3600u, false));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_window_is_local_midnight_plus_48h);
@@ -95,5 +146,13 @@ int main(int, char**) {
   RUN_TEST(test_backoff_caps_at_one_hour);
   RUN_TEST(test_backoff_zero_failures_uses_base_delay);
   RUN_TEST(test_backoff_huge_counter_does_not_overflow);
+  RUN_TEST(test_cache_hit_morning_wake_is_radio_free);
+  RUN_TEST(test_button_wake_forces_network);
+  RUN_TEST(test_cache_miss_forces_network);
+  RUN_TEST(test_due_ota_check_forces_network);
+  RUN_TEST(test_stale_ntp_forces_network);
+  RUN_TEST(test_afternoon_without_tomorrow_hunts_online);
+  RUN_TEST(test_afternoon_with_tomorrow_stays_radio_free);
+  RUN_TEST(test_dst_switch_window_forces_network);
   return UNITY_END();
 }
