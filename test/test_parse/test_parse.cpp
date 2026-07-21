@@ -56,6 +56,35 @@ void test_malformed_returns_false() {
   TEST_ASSERT_FALSE(parsePricing("not json", d));
 }
 
+// A 200 with zero frames must surface as a parse failure (both boards classify
+// that as retryable and keep the last-good screen), not wipe the dashboard.
+void test_empty_frames_returns_false() {
+  PriceData d;
+  TEST_ASSERT_FALSE(parsePricing(R"({"frames":[],"summary":{}})", d));
+}
+
+// If the nested pricing object is renamed/reshaped again, every frame must be
+// rejected -- not confidently parsed as 0.00 zl (the historical all-zeros bug).
+void test_frames_without_price_gross_return_false() {
+  PriceData d;
+  TEST_ASSERT_FALSE(parsePricing(
+      R"({"frames":[{"start":"2026-06-02T06:00:00Z","metrics":{"cost":{"x":1}}}],"summary":{}})",
+      d));
+}
+
+void test_null_priced_placeholder_frames_are_skipped() {
+  PriceData d;
+  TEST_ASSERT_TRUE(parsePricing(kPricingNullTomorrowJson, d));
+  TEST_ASSERT_EQUAL_UINT(2, d.frames.size());   // only the two real frames survive
+}
+
+void test_negative_price_preserved() {
+  PriceData d;
+  TEST_ASSERT_TRUE(parsePricing(kPricingNegativeJson, d));
+  TEST_ASSERT_FLOAT_WITHIN(0.001, -0.15f, d.frames[1].buy);
+  TEST_ASSERT_FLOAT_WITHIN(0.001, -0.05f, d.frames[1].sell);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_parses_all_frames);
@@ -64,5 +93,9 @@ int main(int, char**) {
   RUN_TEST(test_flags_default_false);
   RUN_TEST(test_today_only);
   RUN_TEST(test_malformed_returns_false);
+  RUN_TEST(test_empty_frames_returns_false);
+  RUN_TEST(test_frames_without_price_gross_return_false);
+  RUN_TEST(test_null_priced_placeholder_frames_are_skipped);
+  RUN_TEST(test_negative_price_preserved);
   return UNITY_END();
 }

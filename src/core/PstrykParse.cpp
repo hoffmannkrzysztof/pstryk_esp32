@@ -16,9 +16,14 @@ bool parsePricing(const char* json, PriceData& out) {
     PriceFrame f;
     f.start = parseIso8601Utc(fr["start"] | "");
     // Price fields are nested under frames[].metrics.pricing.* (not flat on the
-    // frame). A missing object yields a null JsonObject, so the | defaults hold.
+    // frame). A frame with a null/absent price_gross (placeholder tomorrow stub,
+    // or a re-shaped pricing object) is skipped, NOT parsed as 0.00 zl: rendering
+    // confident zeros is exactly the historical all-zeros regression, and a
+    // null-priced stub must not fake hasTomorrow.
     JsonObjectConst p = fr["metrics"]["pricing"];
-    f.buy         = p["price_gross"]          | 0.0f;
+    JsonVariantConst pg = p["price_gross"];
+    if (pg.isNull()) continue;
+    f.buy         = pg.as<float>();
     f.sell        = p["price_prosumer_gross"] | 0.0f;
     f.isCheap     = p["is_cheap"]     | false;
     f.isExpensive = p["is_expensive"] | false;
@@ -26,7 +31,9 @@ bool parsePricing(const char* json, PriceData& out) {
     // clock in PriceLogic::buildView, so isLive stays false here.
     out.frames.push_back(f);
   }
-  return true;
+  // Zero usable frames (empty array or every frame degenerate) is a parse
+  // failure: both boards classify it as retryable and keep the last-good view.
+  return !out.frames.empty();
 }
 
 }  // namespace pstryk

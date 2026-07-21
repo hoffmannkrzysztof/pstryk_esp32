@@ -35,17 +35,28 @@ static void drawStrip(IRenderer& r, const Palette& p, const char* left,
 static void drawChart(IRenderer& r, const Palette& p, const std::vector<Bar>& bars,
                       int x, int y, int w, int h) {
   if (bars.empty()) { r.text(x, y + h / 2, "Brak danych", p.muted, 2); return; }
-  float maxP = 0.0001f;
-  for (const Bar& b : bars) if (b.price > maxP) maxP = b.price;
+  // Zero-baseline scaling so negative prices render as bars hanging below the
+  // baseline instead of vanishing (Arduino_GFX normalizes a negative height
+  // into garbage geometry). Positive-only data keeps the exact old layout.
+  float maxP = 0.0001f, minP = 0.0f;
+  for (const Bar& b : bars) {
+    if (b.price > maxP) maxP = b.price;
+    if (b.price < minP) minP = b.price;
+  }
   maxP *= 1.1f;
+  float bottom = (minP < 0.0f) ? minP * 1.1f : 0.0f;
+  float span = maxP - bottom;
+  int zeroY = y + (int)((maxP / span) * h);
   int n = (int)bars.size();
   int gap = 3;
   int bw = (w - (n - 1) * gap) / n; if (bw < 1) bw = 1;
   for (int i = 0; i < n; ++i) {
     const Bar& b = bars[i];
-    int bh = (int)((b.price / maxP) * h);
+    float ap = b.price >= 0.0f ? b.price : -b.price;
+    int bh = (int)((ap / span) * h);
     int bx = x + i * (bw + gap);
-    int by = y + h - bh;
+    int by = b.price >= 0.0f ? zeroY - bh : zeroY;
+    if (by + bh > y + h) bh = y + h - by;
     uint16_t c = b.isCheap ? p.green : (b.isExpensive ? p.red : p.barbg);
     r.fillRect(bx, by, bw, bh, c);
     if (b.isLive) r.drawRect(bx - 1, by - 1, bw + 2, bh + 2, p.text);

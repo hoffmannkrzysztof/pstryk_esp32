@@ -51,13 +51,17 @@ PriceView buildView(const PriceData& data, time_t now) {
   // Current frame: prefer is_live; else the frame whose hour contains `now`.
   int cur = v.liveIndex;
   if (cur < 0) {
+    int todayIdx = 0;
     for (size_t i = 0; i < data.frames.size(); ++i) {
+      bool isToday = localDayOrdinal(data.frames[i].start) == todayOrd;
       if (now >= data.frames[i].start && now < data.frames[i].start + 3600) {
-        // map into today vector if present
-        for (size_t j = 0; j < v.today.size(); ++j)
-          if (v.today[j].hour == localHour(data.frames[i].start)) { cur = (int)j; break; }
+        // Positional index into v.today (it was built in frame order): matching
+        // by local hour is ambiguous on the 25 h DST fall-back day, where 02:00
+        // occurs twice with different prices.
+        if (isToday) cur = todayIdx;
         break;
       }
+      if (isToday) ++todayIdx;
     }
   }
   if (cur >= 0 && cur < (int)v.today.size()) {
@@ -68,11 +72,10 @@ PriceView buildView(const PriceData& data, time_t now) {
     v.currentBuy = v.today[cur].price;
     v.currentHour = v.today[cur].hour;
     v.currentBelowAvg = v.currentBuy <= v.todayAvg;
-    // sell price: find matching source frame by hour
+    // sell price: same source frame, matched by epoch containment (local hour
+    // is ambiguous on the 25 h DST day)
     for (const PriceFrame& f : data.frames)
-      if (localDayOrdinal(f.start) == todayOrd && localHour(f.start) == v.currentHour) {
-        v.currentSell = f.sell; break;
-      }
+      if (now >= f.start && now < f.start + 3600) { v.currentSell = f.sell; break; }
     // next hour trend
     if (cur + 1 < (int)v.today.size()) {
       v.nextBuy = v.today[cur + 1].price;

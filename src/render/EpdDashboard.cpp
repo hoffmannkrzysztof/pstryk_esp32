@@ -38,6 +38,11 @@ int drawBigPrice(IRenderer& r, const Pal& p, int x, int y, int h, const char* s)
     if (*q == ',' || *q == '.') {
       r.fillRect(cx, y + h - t, t, t, p.ink);                    // separator block
       cx += t + gap;
+    } else if (*q == '-') {
+      // Negative price: the g (middle) segment. Dropping the sign here showed
+      // |price| as the headline whenever the market went negative.
+      r.fillRect(cx, y + (h - t) / 2, w, t, p.ink);
+      cx += w + gap;
     } else if (*q >= '0' && *q <= '9') {
       drawDigit(r, cx, y, w, h, t, p.ink, SEG[*q - '0']);
       cx += w + gap;
@@ -55,19 +60,34 @@ void hourLabel(int hour, char* out) { std::snprintf(out, 6, "%02d:00", hour); }
 void drawChart(IRenderer& r, const Pal& p, const std::vector<Bar>& bars,
                float avg, int liveIdx, int x, int y, int w, int h) {
   if (bars.empty()) return;
-  float maxP = 0.0001f;
+  // Scale from a zero baseline that admits negative prices (real on the PL
+  // day-ahead market): positive bars grow up from the baseline, negative bars
+  // hang below it, everything stays inside [y, y+h]. With no negatives the
+  // baseline is y+h and the rendering is identical to the positive-only layout.
+  float maxP = 0.0001f, minP = 0.0f;
   int n = (int)bars.size();
-  for (int i = 0; i < n; ++i) if (bars[i].price > maxP) maxP = bars[i].price;
+  for (int i = 0; i < n; ++i) {
+    if (bars[i].price > maxP) maxP = bars[i].price;
+    if (bars[i].price < minP) minP = bars[i].price;
+  }
   float top = maxP * 1.12f;
+  float bottom = (minP < 0.0f) ? minP * 1.12f : 0.0f;
+  float span = top - bottom;
+  int zeroY = y + (int)((top / span) * h);
   int gap = 2, bw = (w - (n - 1) * gap) / n; if (bw < 1) bw = 1;
   for (int i = 0; i < n; ++i) {
-    int bh = (int)((bars[i].price / top) * h); if (bh < 2) bh = 2;
-    int bx = x + i * (bw + gap), by = y + h - bh;
+    float ap = bars[i].price >= 0.0f ? bars[i].price : -bars[i].price;
+    int bh = (int)((ap / span) * h); if (bh < 2) bh = 2;
+    int bx = x + i * (bw + gap);
+    int by = bars[i].price >= 0.0f ? zeroY - bh : zeroY;
+    if (by + bh > y + h) bh = y + h - by;   // clamp a rounded-up negative stub
     uint16_t c = (bars[i].price >= avg) ? p.dark : p.light;
     r.fillRect(bx, by, bw, bh, c);
     if (i == liveIdx) r.drawRect(bx - 1, by - 1, bw + 2, bh + 2, p.ink);
   }
-  int ay = y + h - (int)((avg / top) * h);
+  int ay = zeroY - (int)((avg / span) * h);
+  if (ay < y) ay = y;
+  if (ay > y + h - 1) ay = y + h - 1;       // keep the dashes inside the chart
   for (int dx = x; dx < x + w; dx += 10) r.drawLine(dx, ay, dx + 5, ay, p.ink);
 }
 

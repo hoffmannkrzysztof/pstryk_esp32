@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include "net/OtaUpdater.h"
 #include "net/OtaRollback.h"
+#include <esp_task_wdt.h>
 #include <cstdio>
 
 namespace pstryk {
@@ -69,6 +70,19 @@ void App::setup() {
   nextRotateAtMs_ = now + kRotateMs;
   lastRedrawMs_ = 0;  // force immediate first redraw
   nextOtaCheckAtMs_ = now + 6u * 60u * 60u * 1000u;   // first OTA check ~6 h after boot
+
+  // Subscribe loopTask to the task watchdog. On this 24/7 board loopTask is not
+  // watched by default (the TWDT observes only CPU0's idle task), so a silent
+  // wedge inside TLS/HTTP/OTA would freeze the wall display forever while it
+  // keeps showing a healthy-looking frame with stale prices. 180 s covers the
+  // worst legitimate iteration (double fetch attempt + full OTA transaction);
+  // the panic handler reboots and the board self-recovers in ~2 min.
+  esp_task_wdt_config_t wdtCfg = {};
+  wdtCfg.timeout_ms = 180000;
+  wdtCfg.idle_core_mask = 1 << 0;   // keep the default CPU0-idle watch
+  wdtCfg.trigger_panic = true;
+  esp_task_wdt_reconfigure(&wdtCfg);
+  esp_task_wdt_add(nullptr);
 }
 
 void App::doFetch() {
@@ -85,6 +99,7 @@ void App::doFetch() {
   if (res.status == FetchStatus::Ok) {
     data_ = fresh;
     view_ = buildView(data_, now);
+    lastViewHour_ = localHour(now);
     haveData_ = view_.hasData;
     lastFetchOk_ = now;
     authError_ = false;
@@ -129,22 +144,45 @@ void App::redraw() {
 
 void App::loop() {
   uint32_t now = millis();
+  esp_task_wdt_reset();
 
   // BOOT held -> re-open captive portal.
   if (digitalRead(PIN_BUTTON_BOOT) == LOW) {
     delay(50);
     if (digitalRead(PIN_BUTTON_BOOT) == LOW) {
       renderMessage(gfx_, "Konfiguracja", "Polacz z 'Pstryk-Setup'");
+      esp_task_wdt_delete(nullptr);   // the portal blocks intentionally (up to 10 min)
       provisioner_.ensureConnected(settings_, /*forcePortal=*/true);
       ESP.restart();
     }
+  }
+
+  // Hour boundary: re-derive the view from the in-RAM data so TERAZ, the trend
+  // arrow and the chart ring move to the new hour immediately -- buildView gets
+  // the live frame and the day split from `wall`, so this also flips the day at
+  // midnight when tomorrow's frames were fetched earlier. Previously the view
+  // was rebuilt only on a successful fetch, so the headline showed the previous
+  // hour's price for up to ~30 min after every HH:00.
+  time_t wall = time(nullptr);
+  if (haveData_ && wall >= kTimeValid && localHour(wall) != lastViewHour_) {
+    view_ = buildView(data_, wall);
+    lastViewHour_ = localHour(wall);
+    haveData_ = view_.hasData;
+    if (pageIdx_ >= (view_.hasTomorrow ? 4 : 3)) pageIdx_ = 0;
+    lastRedrawMs_ = 0;                // repaint with the new hour now
   }
 
   if ((int32_t)(now - nextFetchAtMs_) >= 0) doFetch();
 
   if ((int32_t)(now - nextOtaCheckAtMs_) >= 0) {
     nextOtaCheckAtMs_ = now + 6u * 60u * 60u * 1000u;   // re-check every ~6 h
-    if (WiFi.status() == WL_CONNECTED) OtaUpdater().runOnce();  // reboots on update
+    if (WiFi.status() == WL_CONNECTED) {
+      // A slow-link OTA download may legitimately exceed the WDT window; it
+      // either reboots into the new image or returns here.
+      esp_task_wdt_delete(nullptr);
+      OtaUpdater().runOnce();
+      esp_task_wdt_add(nullptr);
+    }
   }
 
   if ((int32_t)(now - nextRotateAtMs_) >= 0) {
