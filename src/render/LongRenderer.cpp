@@ -35,8 +35,11 @@
 namespace pstryk {
 
 bool LongRenderer::begin() {
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);  // backlight on
+  // LEDC PWM instead of a hard HIGH: enables night dimming of the 24/7 wall
+  // display. 5 kHz / 8-bit is LilyGo's own factory-demo configuration for this
+  // backlight pin.
+  ledcAttach(TFT_BL, 5000, 8);
+  setBacklight(255);
 
   // D0=mosi=13, D1=miso=18, D2=quadwp=21, D3=quadhd=14
   bus_ = new Arduino_ESP32QSPI(
@@ -120,5 +123,11 @@ int LongRenderer::textWidth(const char* s, int size) {
 int LongRenderer::textHeight(int size) { return 8 * size; }
 
 void LongRenderer::present() { canvas_->flush(); }
+
+void LongRenderer::setBacklight(uint8_t duty) {
+  if (backlightDuty_ == (int)duty) return;
+  ledcWrite(TFT_BL, duty);
+  backlightDuty_ = duty;
+}
 
 }  // namespace pstryk

@@ -24,10 +24,15 @@ class LongRenderer : public IRenderer {
   int  textHeight(int size) override;
   void present() override;
 
+  // Backlight duty 0..255 via LEDC PWM (was hard-wired digitalWrite HIGH).
+  // Lets the app dim the 24/7 wall display at night; no-op if duty unchanged.
+  void setBacklight(uint8_t duty);
+
  private:
   Arduino_DataBus* bus_ = nullptr;
   Arduino_GFX*     panel_ = nullptr;
   Arduino_Canvas*  canvas_ = nullptr;  // 640x180 framebuffer in PSRAM
+  int              backlightDuty_ = -1;
 };
 
 }  // namespace pstryk

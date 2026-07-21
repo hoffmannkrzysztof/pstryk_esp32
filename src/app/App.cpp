@@ -100,6 +100,7 @@ void App::doFetch() {
     data_ = fresh;
     view_ = buildView(data_, now);
     lastViewHour_ = localHour(now);
+    dataGen_++;
     haveData_ = view_.hasData;
     lastFetchOk_ = now;
     authError_ = false;
@@ -128,16 +129,32 @@ void App::advancePage() {
 
 void App::redraw() {
   time_t now = time(nullptr);
-  if (now < kTimeValid) { renderMessage(gfx_, "Czas", "Synchronizacja..."); return; }
+  bool timeOk = now >= kTimeValid;
+  bool stale = timeOk && haveData_ && lastFetchOk_ > 0 &&
+               (now - lastFetchOk_) > (time_t)kStaleSec;
+  int minute = timeOk ? (int)((now % 3600) / 60) : -1;
+
+  // Dirty check: the 1 s tick is only the CADENCE; actually repainting and
+  // QSPI-flushing the full 640x180 frame is worth doing only when something
+  // visible changed (minute rollover, page rotation, new data, state flips).
+  // Previously 59-60 of every 60 frames were pixel-identical.
+  uint32_t sig = ((uint32_t)(minute + 1))
+               | ((uint32_t)pageIdx_ << 8)
+               | ((uint32_t)(timeOk ? 1 : 0) << 12)
+               | ((uint32_t)(authError_ ? 1 : 0) << 13)
+               | ((uint32_t)(stale ? 1 : 0) << 14)
+               | ((uint32_t)(haveData_ ? 1 : 0) << 15)
+               | ((uint32_t)dataGen_ << 16);
+  if (sig == lastUiSig_) return;
+  lastUiSig_ = sig;
+
+  if (!timeOk) { renderMessage(gfx_, "Czas", "Synchronizacja..."); return; }
   if (authError_) {
     renderMessage(gfx_, "Blad klucza API", "Przytrzymaj BOOT, aby zmienic");
     return;
   }
-  bool stale = haveData_ && lastFetchOk_ > 0 &&
-               (now - lastFetchOk_) > (time_t)kStaleSec;
   char clock[6];
-  std::snprintf(clock, sizeof(clock), "%02d:%02d", localHour(now),
-                (int)((now % 3600) / 60));
+  std::snprintf(clock, sizeof(clock), "%02d:%02d", localHour(now), minute);
   int dotCount = view_.hasTomorrow ? 4 : 3;
   int dotIdx = pageIdx_ < dotCount ? pageIdx_ : dotCount - 1;
   renderPage(gfx_, kPages[pageIdx_], view_, stale, clock, dotIdx, dotCount);
@@ -168,15 +185,25 @@ void App::loop() {
   if (haveData_ && wall >= kTimeValid && localHour(wall) != lastViewHour_) {
     view_ = buildView(data_, wall);
     lastViewHour_ = localHour(wall);
+    dataGen_++;                       // view content changed without a fetch
     haveData_ = view_.hasData;
     if (pageIdx_ >= (view_.hasTomorrow ? 4 : 3)) pageIdx_ = 0;
     lastRedrawMs_ = 0;                // repaint with the new hour now
   }
 
+  // Night dimming: this is a wall display; 23:00-06:00 local it drops to ~12%
+  // backlight duty (still readable, far less glare and panel wear).
+  if (wall >= kTimeValid) {
+    int h = localHour(wall);
+    gfx_.setBacklight((h >= 23 || h < 6) ? 30 : 255);
+  }
+
   if ((int32_t)(now - nextFetchAtMs_) >= 0) doFetch();
 
   if ((int32_t)(now - nextOtaCheckAtMs_) >= 0) {
-    nextOtaCheckAtMs_ = now + 6u * 60u * 60u * 1000u;   // re-check every ~6 h
+    // Re-check daily, aligned with the e-paper board's dueForOtaCheck policy
+    // (the first check still runs ~6 h after boot, set in setup()).
+    nextOtaCheckAtMs_ = now + 24u * 60u * 60u * 1000u;
     if (WiFi.status() == WL_CONNECTED) {
       // A slow-link OTA download may legitimately exceed the WDT window; it
       // either reboots into the new image or returns here.
@@ -196,6 +223,11 @@ void App::loop() {
     redraw();
     lastRedrawMs_ = now;
   }
+
+  // Bounded sleep (vTaskDelay under the hood): lets the idle task run WFI
+  // instead of pinning a 240 MHz core at 100% forever. 20 ms still catches the
+  // BOOT hold (debounced 50 ms above) and every timer above ticks in seconds.
+  delay(20);
 }
 
 }  // namespace pstryk

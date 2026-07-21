@@ -37,6 +37,8 @@ class App {
   uint32_t lastRedrawMs_ = 0;
   uint32_t nextOtaCheckAtMs_ = 0;
   uint32_t failCount_ = 0;       // consecutive network/parse fetch failures (drives backoff)
+  uint32_t lastUiSig_ = 0;       // signature of the last rendered frame (dirty check)
+  uint16_t dataGen_ = 0;         // bumped whenever view_ changes (fetch / hour rebuild)
   int      pageIdx_ = 0;
 };
 

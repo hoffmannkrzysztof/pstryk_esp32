@@ -6,12 +6,19 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <Update.h>  // pulls in Updater_Signing.h (UpdaterRSAVerifier, SHA2Builder) under UPDATE_SIGN
+#include <esp_attr.h>
 
 namespace pstryk {
 
 // Stable "latest release" manifest URL; GitHub 302-redirects to the asset CDN.
 static const char* kManifestBase =
     "https://github.com/hoffmannkrzysztof/pstryk_esp32/releases/latest/download/manifest-";
+
+// ETag of the last seen manifest. Survives deep sleep on the e-paper board
+// (RTC RAM), plain uptime-static on the Long board. Lets the daily check end
+// in a 304 with no body download/parse when no release was published, which
+// is the overwhelmingly common case.
+RTC_DATA_ATTR static char g_manifestEtag[64] = "";
 
 OtaResult OtaUpdater::runOnce(bool force) {
   // 1) Fetch this board's manifest.
@@ -23,11 +30,23 @@ OtaResult OtaUpdater::runOnce(bool force) {
   mHttp.setConnectTimeout(8000);
   mHttp.setTimeout(12000);
   if (!mHttp.begin(mClient, manifestUrl)) return OtaResult::FetchError;
+  static const char* kCollect[] = {"ETag"};
+  mHttp.collectHeaders(kCollect, 1);
+  // Conditional GET -- but never on a forced (bootstrap) install, which must
+  // always read the manifest to flash the current release.
+  if (!force && g_manifestEtag[0]) mHttp.addHeader("If-None-Match", g_manifestEtag);
   int mCode = mHttp.GET();
+  if (mCode == HTTP_CODE_NOT_MODIFIED) {                  // 304: nothing new
+    mHttp.end();
+    return OtaResult::NoUpdate;
+  }
   if (mCode != HTTP_CODE_OK) {
     log_e("OTA manifest fetch failed: %d", mCode);
     mHttp.end();
     return OtaResult::FetchError;
+  }
+  if (mHttp.hasHeader("ETag")) {
+    strlcpy(g_manifestEtag, mHttp.header("ETag").c_str(), sizeof(g_manifestEtag));
   }
   String body = mHttp.getString();
   mHttp.end();
