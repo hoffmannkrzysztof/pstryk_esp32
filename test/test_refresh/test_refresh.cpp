@@ -54,6 +54,31 @@ void test_wake_not_capped_before_noon() {
   TEST_ASSERT_EQUAL_UINT32(55u * 60u + 5u, secondsUntilNextWake(now, false));
 }
 
+void test_backoff_first_failure_is_60s() {
+  TEST_ASSERT_EQUAL_UINT32(60u, backoffSeconds(1));
+}
+
+void test_backoff_doubles_per_failure() {
+  TEST_ASSERT_EQUAL_UINT32(120u, backoffSeconds(2));
+  TEST_ASSERT_EQUAL_UINT32(240u, backoffSeconds(3));
+  TEST_ASSERT_EQUAL_UINT32(480u, backoffSeconds(4));
+  TEST_ASSERT_EQUAL_UINT32(960u, backoffSeconds(5));
+  TEST_ASSERT_EQUAL_UINT32(1920u, backoffSeconds(6));
+}
+
+void test_backoff_caps_at_one_hour() {
+  TEST_ASSERT_EQUAL_UINT32(3600u, backoffSeconds(7));
+  TEST_ASSERT_EQUAL_UINT32(3600u, backoffSeconds(20));
+}
+
+void test_backoff_zero_failures_uses_base_delay() {
+  TEST_ASSERT_EQUAL_UINT32(60u, backoffSeconds(0));
+}
+
+void test_backoff_huge_counter_does_not_overflow() {
+  TEST_ASSERT_EQUAL_UINT32(3600u, backoffSeconds(0xFFFFFFFFu));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_window_is_local_midnight_plus_48h);
@@ -65,5 +90,10 @@ int main(int, char**) {
   RUN_TEST(test_wake_capped_at_30min_midday_without_tomorrow);
   RUN_TEST(test_wake_not_capped_midday_when_tomorrow_present);
   RUN_TEST(test_wake_not_capped_before_noon);
+  RUN_TEST(test_backoff_first_failure_is_60s);
+  RUN_TEST(test_backoff_doubles_per_failure);
+  RUN_TEST(test_backoff_caps_at_one_hour);
+  RUN_TEST(test_backoff_zero_failures_uses_base_delay);
+  RUN_TEST(test_backoff_huge_counter_does_not_overflow);
   return UNITY_END();
 }

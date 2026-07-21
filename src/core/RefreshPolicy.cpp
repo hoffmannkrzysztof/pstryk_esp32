@@ -25,4 +25,11 @@ uint32_t secondsUntilNextWake(time_t now, bool hasTomorrow) {
   return wake;
 }
 
+uint32_t backoffSeconds(uint32_t consecFails) {
+  uint32_t n = consecFails > 0 ? consecFails - 1 : 0;  // first failure -> base delay
+  if (n > 6) n = 6;                                    // clamp before shifting
+  uint32_t s = 60u << n;
+  return s > 3600u ? 3600u : s;
+}
+
 }  // namespace pstryk

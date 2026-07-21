@@ -41,8 +41,14 @@ static const time_t   kTimeValid = 1700000000;
 
 // Consecutive transient (network/parse) fetch failures, retained across deep sleep.
 // Lets a one-off cold-wake blip keep the last good e-paper image instead of wiping
-// it to an error screen; the error only surfaces after a sustained outage.
+// it to an error screen; the error surfaces once after a sustained outage, and the
+// retry cadence doubles (backoffSeconds) so an outage costs ~1 wake/h, not 1/min.
 RTC_DATA_ATTR static uint32_t g_consecFail = 0;
+// Consecutive wakes that could not associate with Wi-Fi at all; same backoff curve.
+RTC_DATA_ATTR static uint32_t g_wifiFail = 0;
+// Set once the API-key error screen has been painted, so identical wakes don't
+// re-flash the same message (every drawMessage is a full panel clear+draw).
+RTC_DATA_ATTR static uint8_t g_authShown = 0;
 // Last OTA-manifest check (epoch s), retained across deep sleep so we poll GitHub
 // at most once/day per device rather than every wake.
 RTC_DATA_ATTR static uint32_t g_lastOtaCheck = 0;
@@ -110,6 +116,13 @@ void SleepCycle::sleepFor(uint32_t seconds) {
   rtc_gpio_pulldown_dis((gpio_num_t)PIN_BTN);
   esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN, 0);  // button (active low) wake
+  // Zero the EPD CFG shift register for the night. epd_poweroff() alone leaves
+  // ep_scan_direction latched high in the (always-3.3V-powered) register, which
+  // keeps driving the unpowered panel through deep sleep; epd_poweroff_all()
+  // clears every output (LilyGo's own pre-deep-sleep pattern for this board).
+  // Ordered rail shutdown first -- idempotent if the panel is already off.
+  epd_poweroff();
+  epd_poweroff_all();
   esp_deep_sleep_start();
 }
 
@@ -181,6 +194,7 @@ void SleepCycle::setup() {
   WiFiProvisioner prov;
   bool wifi = prov.ensureConnected(settings_, /*forcePortal=*/false);
   st.wifiOk = wifi;
+  if (wifi) g_wifiFail = 0;
 
   PriceView view;
   if (wifi) {
@@ -223,6 +237,7 @@ void SleepCycle::setup() {
     }
     if (res.status == FetchStatus::Ok) {
       g_consecFail = 0;
+      g_authShown = 0;
       view = buildView(data, now);
       struct tm lt; localtime_r(&now, &lt);
       char clk[6]; std::snprintf(clk, sizeof(clk), "%02d:%02d", lt.tm_hour, lt.tm_min);
@@ -237,26 +252,35 @@ void SleepCycle::setup() {
         OtaUpdater().runOnce();
       }
     } else if (res.status == FetchStatus::AuthError) {
-      drawMessage(gfx_, "Blad klucza API", "Przytrzymaj przycisk, aby zmienic");
-      nextWake = 1800;
+      // The key can only change via the captive portal (button-held), so hourly
+      // re-checks are pointless; paint the hint once and check ~4x/day.
+      if (!g_authShown) {
+        drawMessage(gfx_, "Blad klucza API", "Przytrzymaj przycisk, aby zmienic");
+        g_authShown = 1;
+      }
+      nextWake = 4u * 3600u;
     } else if (res.status == FetchStatus::RateLimited) {
       drawMessage(gfx_, "Limit zapytan", "Sprobuje pozniej");
       nextWake = res.retryAfterSec > 0 ? (uint32_t)res.retryAfterSec : 1200;
     } else {
       // Transient network/parse error AFTER the in-cycle retries. The e-paper holds its
-      // last good image at zero power, so don't wipe it for a brief blip -- only surface
-      // the error after several consecutive failures. Short 60 s backoff (was 300 s).
+      // last good image at zero power, so don't wipe it for a brief blip -- surface the
+      // error once, when the outage is confirmed (3rd straight failure), and double the
+      // retry interval so a sustained outage costs ~1 wake/h instead of 1/min.
       g_consecFail++;
-      if (g_consecFail >= 3) {
+      if (g_consecFail == 3) {
         struct tm lt; localtime_r(&now, &lt);
         char l2[24]; std::snprintf(l2, sizeof(l2), "%02d:%02d", lt.tm_hour, lt.tm_min);
         drawMessage(gfx_, "Blad pobierania", l2);
       }
-      nextWake = 60;
+      nextWake = backoffSeconds(g_consecFail);
     }
   } else {
-    drawMessage(gfx_, "Brak Wi-Fi", "Sprobuje ponownie");
-    nextWake = 300;
+    // Same shape as the fetch-failure path: keep the last good dashboard through a
+    // brief router blip, only admit "no Wi-Fi" on the 3rd straight failed wake.
+    g_wifiFail++;
+    if (g_wifiFail == 3) drawMessage(gfx_, "Brak Wi-Fi", "Sprobuje ponownie");
+    nextWake = backoffSeconds(g_wifiFail);
   }
 
   // 8) sleep

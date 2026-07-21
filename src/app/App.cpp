@@ -103,6 +103,7 @@ void App::doFetch() {
     haveData_ = view_.hasData;
     lastFetchOk_ = now;
     authError_ = false;
+    failCount_ = 0;
     nextFetchAtMs_ = millis() + nextRefreshMs(now, view_.hasTomorrow);
   } else if (res.status == FetchStatus::AuthError) {
     authError_ = true;                     // sticky; redraw() shows the error screen
@@ -113,7 +114,7 @@ void App::doFetch() {
       backoff = res.retryAfterSec > 0 ? (uint32_t)res.retryAfterSec * 1000u
                                       : 20u * 60u * 1000u;  // cap-safe default (<=3/hr)
     else
-      backoff = 60u * 1000u;               // network/parse error
+      backoff = backoffSeconds(++failCount_) * 1000u;  // network/parse: 60 s -> 1 h
     nextFetchAtMs_ = millis() + backoff;
   }
 }
