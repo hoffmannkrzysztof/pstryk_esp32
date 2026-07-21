@@ -25,8 +25,16 @@ static const Page kPages[] = {Page::Teraz, Page::Chart, Page::Extremes, Page::Ju
 // force-install the latest signed release for this board and reboot into it. On any
 // failure it shows a message and restarts to retry.
 void App::runBootstrap() {
-  renderMessage(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
-  if (!provisioner_.ensureConnected(settings_, /*forcePortal=*/!settings_.isComplete())) {
+  bool needPortal = !settings_.isComplete();
+  if (needPortal) {
+    char pskLine[40];
+    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
+                  WiFiProvisioner::portalPassword());
+    renderMessage(gfx_, "Konfiguracja", pskLine);
+  } else {
+    renderMessage(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
+  }
+  if (!provisioner_.ensureConnected(settings_, /*forcePortal=*/needPortal)) {
     renderMessage(gfx_, "WiFi", "Blad polaczenia");
     delay(3000);
     ESP.restart();
@@ -51,7 +59,15 @@ void App::setup() {
   return;
 #endif
 
-  renderMessage(gfx_, "WiFi", "Laczenie / konfiguracja...");
+  if (!settings_.isComplete()) {
+    // First boot: ensureConnected will open the portal -- show its password.
+    char pskLine[40];
+    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
+                  WiFiProvisioner::portalPassword());
+    renderMessage(gfx_, "Konfiguracja", pskLine);
+  } else {
+    renderMessage(gfx_, "WiFi", "Laczenie...");
+  }
   if (!provisioner_.ensureConnected(settings_, /*forcePortal=*/false)) {
     renderMessage(gfx_, "WiFi", "Blad polaczenia");
     delay(3000);
@@ -168,7 +184,10 @@ void App::loop() {
   if (digitalRead(PIN_BUTTON_BOOT) == LOW) {
     delay(50);
     if (digitalRead(PIN_BUTTON_BOOT) == LOW) {
-      renderMessage(gfx_, "Konfiguracja", "Polacz z 'Pstryk-Setup'");
+      char pskLine[40];
+      std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
+                    WiFiProvisioner::portalPassword());
+      renderMessage(gfx_, "Konfiguracja", pskLine);
       esp_task_wdt_delete(nullptr);   // the portal blocks intentionally (up to 10 min)
       provisioner_.ensureConnected(settings_, /*forcePortal=*/true);
       ESP.restart();

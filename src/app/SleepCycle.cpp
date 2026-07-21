@@ -71,6 +71,11 @@ RTC_DATA_ATTR static uint32_t g_lastNtpSync = 0;
 // Signature of the last painted dashboard; a wake whose content is identical
 // (hunt wakes, drift-early wakes) skips the full panel flash entirely.
 RTC_DATA_ATTR static uint32_t g_lastDrawSig = 0;
+// Local day ordinal of the last 4-cycle deghost clear; ordinary refreshes use
+// the quick 2-cycle clear and the full deghost runs on the first paint of a day.
+RTC_DATA_ATTR static int32_t g_lastDeepCleanDay = 0;
+// Set once the deep-discharge screen has been painted; cleared on recovery.
+RTC_DATA_ATTR static uint8_t g_lowBattParked = 0;
 
 static int bcd2dec(uint8_t b) { return (b >> 4) * 10 + (b & 0x0F); }
 static uint8_t dec2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
@@ -85,14 +90,14 @@ bool SleepCycle::buttonHeld(uint32_t ms) {
   return false;
 }
 
-int SleepCycle::readBatteryPercent(bool& low) {
+int SleepCycle::readBatteryPercent(bool& low, float& volts) {
   epd_poweron();             // POWER_EN gates the battery divider
   delay(10);
   long acc = 0;
   for (int i = 0; i < 16; ++i) acc += analogReadMilliVolts(PIN_BATT);
   epd_poweroff();
   float pinMv = acc / 16.0f;
-  float volts = batteryVoltsFromPinMv(pinMv);
+  volts = batteryVoltsFromPinMv(pinMv);
   low = volts < 3.45f;
   return batteryPercent(volts);
 }
@@ -219,13 +224,22 @@ static void msgScreen(IRenderer& g, const char* line1, const char* line2) {
 // and retry on the next wake.
 void SleepCycle::runBootstrap() {
   settings_.load();
-  msgScreen(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
+  bool needPortal = !settings_.isComplete();
+  if (needPortal) {
+    char pskLine[40];
+    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
+                  WiFiProvisioner::portalPassword());
+    msgScreen(gfx_, "Konfiguracja", pskLine);
+  } else {
+    msgScreen(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
+  }
   WiFiProvisioner prov;
-  if (!prov.ensureConnected(settings_, /*forcePortal=*/!settings_.isComplete())) {
+  if (!prov.ensureConnected(settings_, /*forcePortal=*/needPortal)) {
     msgScreen(gfx_, "Brak Wi-Fi", "Sprobuje ponownie");
     sleepFor(60);
     return;
   }
+  if (needPortal) msgScreen(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
   OtaUpdater().runOnce(/*force=*/true);  // reboots into the installed release on success
   msgScreen(gfx_, "Blad instalacji", "Sprobuje ponownie");  // only reached on failure
   sleepFor(60);
@@ -255,7 +269,10 @@ void SleepCycle::setup() {
   // 1) reconfigure if button held at boot, or if no saved config
   settings_.load();
   if (buttonHeld(3000) || !settings_.isComplete()) {
-    msgScreen(gfx_, "Konfiguracja", "Polacz z 'Pstryk-Setup'");
+    char pskLine[40];
+    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
+                  WiFiProvisioner::portalPassword());
+    msgScreen(gfx_, "Konfiguracja", pskLine);
     WiFiProvisioner prov;
     prov.ensureConnected(settings_, /*forcePortal=*/true);
     g_cache.count = 0;                // fresh config -> force a fetch next cycle
@@ -265,8 +282,22 @@ void SleepCycle::setup() {
 
   // 2) battery BEFORE Wi-Fi (ADC2 conflicts with Wi-Fi)
   bool batLow = false;
-  int batPct = readBatteryPercent(batLow);
+  float batVolts = 0.0f;
+  int batPct = readBatteryPercent(batLow, batVolts);
   EpdStatus st; st.batteryPct = batPct; st.batteryLow = batLow;
+
+  // Deep-discharge floor: below ~3.35 V both the radio burst and the panel
+  // flash abuse the cell. Park with one clear message and re-check every 6 h
+  // until a charger brings the voltage back.
+  if (batVolts > 0.5f && batVolts < 3.35f) {
+    if (!g_lowBattParked) {
+      msgScreen(gfx_, "Bateria rozladowana", "Podlacz ladowarke");
+      g_lowBattParked = 1;
+    }
+    sleepFor(6u * 3600u);
+    return;
+  }
+  g_lowBattParked = 0;
 
   // 3) seed clock from RTC so we have SOME time even if Wi-Fi fails. This is only
   // a fallback -- when Wi-Fi is up, NTP below overrides it (step 5). The RTC must
@@ -288,7 +319,10 @@ void SleepCycle::setup() {
     uint32_t ntpAge = (g_lastNtpSync > 0 && seedNow > (time_t)g_lastNtpSync)
                           ? (uint32_t)(seedNow - (time_t)g_lastNtpSync)
                           : 0xFFFFFFFFu;
-    bool otaDue = dueForOtaCheck(g_lastOtaCheck, (uint32_t)seedNow, 24u * 3600u);
+    // A due OTA check does not force the radio on a low cell: a ~2 MB download
+    // there risks a brownout mid-flash; the check resumes once charged.
+    bool otaDue = !batLow &&
+                  dueForOtaCheck(g_lastOtaCheck, (uint32_t)seedNow, 24u * 3600u);
     if (!needsNetwork(seedNow, buttonWake, cacheView(seedNow), ntpAge, otaDue)) {
       PriceData data;
       cacheLoad(data);
@@ -300,6 +334,10 @@ void SleepCycle::setup() {
         st.wifiOk = true;             // radio deliberately off, not a failure
         uint32_t sig = viewSignature(cachedView, st);
         if (sig != g_lastDrawSig) {   // skip the flash when nothing changed
+          if (localDayOrdinal(seedNow) != g_lastDeepCleanDay) {
+            gfx_.requestDeepClean();  // first paint of the day: full deghost
+            g_lastDeepCleanDay = localDayOrdinal(seedNow);
+          }
           drawDashboard(gfx_, cachedView, st);
           g_lastDrawSig = sig;
         }
@@ -366,8 +404,9 @@ void SleepCycle::setup() {
       view = buildView(data, now);
       // Opportunistic OTA BEFORE the paint: it needs Wi-Fi, and on an update it
       // reboots into the new image -- painting first would waste a full panel
-      // flash. Rate-limited to once/day.
-      if (dueForOtaCheck(g_lastOtaCheck, (uint32_t)now, 24u * 3600u)) {
+      // flash. Rate-limited to once/day; skipped on a low cell (a ~2 MB
+      // download there risks a brownout mid-flash).
+      if (!batLow && dueForOtaCheck(g_lastOtaCheck, (uint32_t)now, 24u * 3600u)) {
         g_lastOtaCheck = (uint32_t)now;
         OtaUpdater().runOnce();
       }
@@ -379,6 +418,10 @@ void SleepCycle::setup() {
       st.clockHHMM = clk;                       // local buffer lives until setup() returns
       uint32_t sig = viewSignature(view, st);
       if (sig != g_lastDrawSig) {               // 7) paint (skip a no-op reflash)
+        if (localDayOrdinal(now) != g_lastDeepCleanDay) {
+          gfx_.requestDeepClean();              // first paint of the day: full deghost
+          g_lastDeepCleanDay = localDayOrdinal(now);
+        }
         drawDashboard(gfx_, view, st);
         g_lastDrawSig = sig;
       }
@@ -399,6 +442,10 @@ void SleepCycle::setup() {
       // error once, when the outage is confirmed (3rd straight failure), and double the
       // retry interval so a sustained outage costs ~1 wake/h instead of 1/min.
       g_consecFail++;
+      // Repeated failures right after a "successful" join are the classic
+      // symptom of a stale fast-connect lease -- drop it so the next wake does
+      // a full DHCP join instead of looping on a dead static config.
+      if (g_consecFail >= 2) WiFiProvisioner::forgetAp();
       if (g_consecFail == 3) {
         struct tm lt; localtime_r(&now, &lt);
         char l2[24]; std::snprintf(l2, sizeof(l2), "%02d:%02d", lt.tm_hour, lt.tm_min);

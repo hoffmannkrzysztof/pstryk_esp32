@@ -93,7 +93,15 @@ int EpdRenderer::textHeight(int size) {
 void EpdRenderer::present() {
   Rect_t area = epd_full_screen();
   epd_poweron();
-  epd_clear();
+  if (deepClean_) {
+    epd_clear();                          // vendor deghost: 4 black/white cycles
+    deepClean_ = false;
+  } else {
+    // Quick clear: 2 cycles suffice between hourly refreshes; ghosting is reset
+    // by the daily deep clean. Halves the panel passes (and poweron window) of
+    // every ordinary refresh.
+    epd_clear_area_cycles(area, 2, 50);
+  }
   epd_draw_grayscale_image(area, fb_);
   epd_poweroff();
 }
