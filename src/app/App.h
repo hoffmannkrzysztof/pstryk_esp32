@@ -27,6 +27,7 @@ class App {
   WiFiProvisioner provisioner_;
   PriceData       data_;
   PriceView       view_;
+  int             lastViewHour_ = -1;   // local hour view_ was built for; rebuild on change
 
   bool     haveData_ = false;
   bool     authError_ = false;   // sticky: shows the API-key error screen until next OK fetch
