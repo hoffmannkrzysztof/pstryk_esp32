@@ -26,8 +26,14 @@ class EpdRenderer : public IRenderer {
   int  textHeight(int size) override;
   void present() override;
 
+  // The next present() runs the vendor's maximal 4-cycle deghost clear instead
+  // of the default 2-cycle quick clear; auto-resets afterwards. The caller arms
+  // this ~daily -- every refresh at 4 cycles was ~32 needless panel passes/day.
+  void requestDeepClean() { deepClean_ = true; }
+
  private:
   uint8_t* fb_ = nullptr;  // EPD_WIDTH*EPD_HEIGHT/2 bytes in PSRAM
+  bool     deepClean_ = false;
 };
 
 }  // namespace pstryk
