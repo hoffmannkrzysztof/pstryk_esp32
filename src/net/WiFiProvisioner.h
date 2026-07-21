@@ -19,6 +19,12 @@ class WiFiProvisioner {
   // fetches keep failing right after "successful" joins -- the classic symptom
   // of a stale static lease -- so the next wake does a full DHCP join.
   static void forgetAp();
+
+  // WPA2 password of the "Pstryk-Setup" portal: 8 random digits, generated once
+  // per boot. Callers show it on the device screen right before opening the
+  // portal -- an OPEN portal would hand the Wi-Fi credential form (and any
+  // typed API key) to anyone in radio range.
+  static const char* portalPassword();
 };
 
 }  // namespace pstryk

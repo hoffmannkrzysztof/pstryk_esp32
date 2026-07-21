@@ -224,13 +224,22 @@ static void msgScreen(IRenderer& g, const char* line1, const char* line2) {
 // and retry on the next wake.
 void SleepCycle::runBootstrap() {
   settings_.load();
-  msgScreen(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
+  bool needPortal = !settings_.isComplete();
+  if (needPortal) {
+    char pskLine[40];
+    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
+                  WiFiProvisioner::portalPassword());
+    msgScreen(gfx_, "Konfiguracja", pskLine);
+  } else {
+    msgScreen(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
+  }
   WiFiProvisioner prov;
-  if (!prov.ensureConnected(settings_, /*forcePortal=*/!settings_.isComplete())) {
+  if (!prov.ensureConnected(settings_, /*forcePortal=*/needPortal)) {
     msgScreen(gfx_, "Brak Wi-Fi", "Sprobuje ponownie");
     sleepFor(60);
     return;
   }
+  if (needPortal) msgScreen(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
   OtaUpdater().runOnce(/*force=*/true);  // reboots into the installed release on success
   msgScreen(gfx_, "Blad instalacji", "Sprobuje ponownie");  // only reached on failure
   sleepFor(60);
@@ -260,7 +269,10 @@ void SleepCycle::setup() {
   // 1) reconfigure if button held at boot, or if no saved config
   settings_.load();
   if (buttonHeld(3000) || !settings_.isComplete()) {
-    msgScreen(gfx_, "Konfiguracja", "Polacz z 'Pstryk-Setup'");
+    char pskLine[40];
+    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
+                  WiFiProvisioner::portalPassword());
+    msgScreen(gfx_, "Konfiguracja", pskLine);
     WiFiProvisioner prov;
     prov.ensureConnected(settings_, /*forcePortal=*/true);
     g_cache.count = 0;                // fresh config -> force a fetch next cycle

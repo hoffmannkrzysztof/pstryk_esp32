@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <esp_attr.h>
+#include <esp_random.h>
 #include <cstring>
 
 namespace pstryk {
@@ -26,6 +27,18 @@ static void rememberAp() {
 }
 
 void WiFiProvisioner::forgetAp() { g_apChannel = 0; }
+
+const char* WiFiProvisioner::portalPassword() {
+  // Random per boot (NOT MAC-derived: the SoftAP BSSID visible in beacons is
+  // built from the same base MAC, so a MAC-derived PSK would be computable by
+  // anyone sniffing the air). Digits only -- easy to retype from the screen.
+  static char psk[9] = "";
+  if (!psk[0]) {
+    for (int i = 0; i < 8; ++i) psk[i] = (char)('0' + (esp_random() % 10));
+    psk[8] = '\0';
+  }
+  return psk;
+}
 
 bool WiFiProvisioner::ensureConnected(Settings& s, bool forcePortal) {
   if (!forcePortal && s.isComplete()) {
@@ -65,11 +78,14 @@ bool WiFiProvisioner::ensureConnected(Settings& s, bool forcePortal) {
   wm.setConfigPortalTimeout(600);
   wm.setConnectTimeout(20);      // bound the post-submit join attempt too
 
-  WiFiManagerParameter apiKeyParam("apikey", "Pstryk API key (sk-...)",
-                                   s.apiKey.c_str(), 80);
+  // The stored key is deliberately NOT prefilled: the form would serve it to
+  // anyone who joins the portal. A blank submit keeps the current key (the
+  // length check below), so reconfiguring Wi-Fi never forces retyping it.
+  WiFiManagerParameter apiKeyParam("apikey", "Pstryk API key (puste = bez zmian)",
+                                   "", 80);
   wm.addParameter(&apiKeyParam);
 
-  bool ok = wm.startConfigPortal("Pstryk-Setup");
+  bool ok = wm.startConfigPortal("Pstryk-Setup", portalPassword());
   if (ok) {
     // Capture whatever WiFiManager negotiated/entered.
     s.ssid = WiFi.SSID();
