@@ -11,7 +11,7 @@ każda ma własną, cienką warstwę renderowania:
 | Płytka | Ekran | Zasilanie | Tryb pracy |
 | --- | --- | --- | --- |
 | **LilyGo T-Display-S3-Long** | 3,4" LCD 640×180 (pasek poziomy), kolor | USB / sieć (always-on) | strony rotujące się automatycznie |
-| **LilyGo T5 4.7" e-paper S3** | 4,7" e-ink 960×540, 16 odcieni szarości | bateria Li-ion | jeden ekran, budzenie co godzinę z deep-sleep |
+| **LilyGo T5 4.7" e-paper S3** | 4,7" e-ink 960×540, 16 odcieni szarości | bateria Li-ion | jeden ekran, budzenie co godzinę z deep-sleep; większość budzeń **bez Wi-Fi**, z cache'u cen w RTC RAM |
 
 ---
 
@@ -33,7 +33,9 @@ obudowy — można też przeczytać na blogu:
 
 ### LilyGo T-Display-S3-Long — 4 strony rotujące się co ~7 s
 
-Bieżąca strona odświeża się co ~1 s (zegar/aktualna godzina), bez zapytań sieciowych.
+Zegar i treść strony odświeżają się na bieżąco, bez zapytań sieciowych (repaint
+tylko gdy coś się realnie zmieniło). W nocy (23:00–06:00) podświetlenie
+przyciemnia się do ~12%.
 
 ![Cztery strony na ekranie T-Display-S3-Long: Teraz, Wykres 24h, Najtaniej/Najdrożej, Jutro](docs/screenshots/long-board.png)
 
@@ -52,7 +54,8 @@ ekranie 960×540. Panel jest bistabilny — trzyma obraz „za darmo" podczas de
   `Następna HH:00`.
 - **Wykres 24h** — godzinowy wykres słupkowy; tanie godziny na zielono (LCD) lub
   jasno (e-paper), drogie na czerwono / ciemno, bieżąca godzina w ramce, linia
-  średniej dziennej (e-paper).
+  średniej dziennej (e-paper). **Ceny ujemne** (nadwyżka PV na rynku) renderują
+  się poprawnie: minus przy cenie, słupki poniżej osi zera.
 - **Najtaniej / Najdrożej** — skrajne godziny dnia.
 - **Jutro** — wykres jutra; **dołącza dopiero gdy Pstryk opublikuje ceny** (zwykle
   ~12:00, czasem później), wcześniej jest pomijany / oznaczony „brak danych jeszcze".
@@ -68,9 +71,16 @@ ekranie 960×540. Panel jest bistabilny — trzyma obraz „za darmo" podczas de
 - 🕒 Strefa **Europe/Warsaw** z obsługą czasu letniego/zimowego (POSIX TZ), synchronizacja NTP.
 - 📊 Logika cen liczona po stronie urządzenia: cena bieżąca, najtańsza/najdroższa
   godzina, średnia dzienna, trend następnej godziny, wykrycie czy „jutro" już jest.
-- 📶 **Konfiguracja przez captive portal** (WiFiManager) — Wi-Fi + klucz API w formularzu WWW.
+- 📶 **Konfiguracja przez captive portal** (WiFiManager) — Wi-Fi + klucz API w
+  formularzu WWW; portal jest **zabezpieczony WPA2**, a jego jednorazowe hasło
+  wyświetla się na ekranie urządzenia.
 - ⏱️ **Strategia odświeżania bezpieczna dla limitu** API (3 zapytania/godzinę).
-- 🔋 e-paper: pomiar baterii, RTC PCF8563, deep-sleep dla wielomiesięcznej pracy.
+- 🔋 e-paper: pomiar baterii, RTC PCF8563, deep-sleep; **cache cen w RTC RAM**
+  sprawia, że większość godzinnych budzeń w ogóle nie włącza radia, a Wi-Fi
+  łączy się szybciej dzięki zapamiętanemu BSSID/kanałowi/dzierżawie DHCP.
+- 🛡️ Odporność na awarie: wykładniczy backoff (60 s → 1 h), ostatni dobry ekran
+  trzymany przez krótkie przerwy w sieci, watchdog na płytce always-on,
+  ochrona ogniwa przy głębokim rozładowaniu.
 - 🧩 **Czysty podział rdzeń ↔ renderowanie** — nową płytkę dodaje się pisząc tylko nowy renderer.
 
 ---
@@ -92,7 +102,7 @@ warstwę renderowania**. Dzięki temu obie płytki współdzielą całą logikę
                   ◄── EpdRenderer (epdiy, framebuffer szarości)  +  EpdDashboard (1 ekran)
    orkiestracja:
        App        — pętla always-on, rotacja stron, harmonogram odświeżania (LCD)
-       SleepCycle — jeden cykl wake→fetch→paint→deep-sleep (e-paper)
+       SleepCycle — jeden cykl wake→(cache w RTC | fetch)→paint→deep-sleep (e-paper)
 ```
 
 - **`PriceView`** to szew między rdzeniem a renderowaniem: logika nigdy nie dotyka
@@ -108,7 +118,8 @@ Szczegóły projektowe: [`docs/superpowers/specs/`](docs/superpowers/specs).
 ## Struktura projektu
 
 ```
-platformio.ini              3 środowiska: tdisplay_long, t5_epaper_s3, native
+platformio.ini              5 środowisk: tdisplay_long, t5_epaper_s3, native
+                            + instalatory *_bootstrap dla czystych płytek
 board/                      definicje płytek LilyGo (PSRAM/flash/USB)
 lib/EPD47/                  wbudowany sterownik e-paper LilyGo (epdiy), GPLv3
 src/
@@ -179,8 +190,10 @@ pio device monitor -e t5_epaper_s3
 ## Pierwsze uruchomienie (konfiguracja Wi-Fi + klucz)
 
 1. Po pierwszym starcie (lub gdy brak zapisanej konfiguracji) urządzenie tworzy
-   sieć Wi-Fi **`Pstryk-Setup`**.
-2. Połącz się z nią telefonem/laptopem — otworzy się **captive portal**.
+   sieć Wi-Fi **`Pstryk-Setup`**, zabezpieczoną **WPA2** — hasło (8 cyfr,
+   losowane przy każdym uruchomieniu) jest **wyświetlane na ekranie urządzenia**.
+2. Połącz się z nią telefonem/laptopem, podając hasło z ekranu — otworzy się
+   **captive portal**.
 3. Wpisz **SSID i hasło Wi-Fi** oraz **klucz API Pstryk** i zapisz.
 4. Urządzenie restartuje się, łączy z Wi-Fi, synchronizuje czas (NTP) i pobiera ceny.
 
@@ -188,6 +201,10 @@ Aby zmienić konfigurację później:
 
 - **LCD:** przytrzymaj przycisk **BOOT** — ponownie otworzy captive portal.
 - **e-paper:** przytrzymaj **przycisk użytkownika (GPIO 21) ≥ 3 s** przy starcie/wybudzeniu.
+
+Przy rekonfiguracji pole klucza API jest **celowo puste** (formularz nie zdradza
+zapisanego klucza) — pozostaw je puste, aby zachować dotychczasowy klucz. Portal
+zamyka się sam po ~10 minutach bezczynności i urządzenie wraca do normalnej pracy.
 
 ---
 
@@ -198,8 +215,12 @@ aktualizacje z GitHub Releases — cicho, w tle, z weryfikacją podpisu i
 automatycznym wycofaniem (rollback) wadliwego obrazu.
 
 - **Płyta e-paper (T5):** sprawdza aktualizacje maksymalnie raz na dobę, przy
-  okazji udanego cyklu pobierania cen.
-- **Płyta AMOLED (T-Display-Long):** sprawdza co ok. 6 godzin.
+  okazji udanego cyklu z siecią; przy niskim stanie baterii kontrola i pobieranie
+  są wstrzymane do naładowania.
+- **Płyta LCD (T-Display-Long):** sprawdza raz na dobę (pierwsza kontrola ~6 h
+  po starcie).
+- Kontrola manifestu jest warunkowa (ETag/304) — gdy nie ma nowego wydania,
+  nic nie jest pobierane.
 - Wersja firmware jest widoczna w rogu ekranu (`vX.Y.Z`); `v0.0.0-dev` oznacza
   lokalny build, który **nie** aktualizuje się sam.
 
@@ -213,7 +234,7 @@ docelowym, wersjonowanym firmwarze (i dalej łapie OTA normalnie):
 
 ```bash
 pio run -e t5_epaper_s3_bootstrap  -t upload   # e-paper
-pio run -e tdisplay_long_bootstrap -t upload   # AMOLED
+pio run -e tdisplay_long_bootstrap -t upload   # LCD
 ```
 
 Instalator pomija bramkę wersji (instaluje najnowsze niezależnie od tego, co ma na
@@ -221,9 +242,9 @@ pokładzie), ale **dalej weryfikuje podpis i zgodność płyty** — nie wgra
 niepodpisanego ani cudzego obrazu. Zwykłe lokalne buildy (`-e t5_epaper_s3`)
 pozostają chronione: jako `0.0.0-dev` nie aktualizują się same.
 
-### Jednorazowa migracja płyty AMOLED
+### Jednorazowa migracja płyty LCD
 
-Starsze buildy AMOLED używały układu partycji `huge_app.csv` z **jedną** partycją
+Starsze buildy LCD (T-Display-Long) używały układu partycji `huge_app.csv` z **jedną** partycją
 aplikacji — OTA jest tam niemożliwe. Aby włączyć OTA, wgraj **raz, przez USB**,
 nową wersję (która używa `default_16MB.csv`). Od tego momentu kolejne
 aktualizacje pójdą już przez OTA. Płyta e-paper nie wymaga tego kroku.
@@ -253,9 +274,18 @@ Jedno zapytanie na odświeżenie pobiera okno **dziś 00:00 → +48 h** (od razu
 przekraczany:
 
 - **LCD (always-on):** co **30 min**; w trybie „oczekiwania na jutro" (od 12:00,
-  dopóki nie ma jutra) co **20 min** (= dokładnie 3/h).
-- **e-paper (deep-sleep):** budzenie do **najbliższej pełnej godziny**; w oknie
-  12:00–16:00 bez jutra — co ~30 min, by szybciej złapać jutrzejsze ceny.
+  dopóki nie ma jutra) co **20 min** (= dokładnie 3/h). Nagłówek „TERAZ"
+  przełącza się na nową godzinę natychmiast na granicy godziny (widok jest
+  przeliczany lokalnie, bez zapytania).
+- **e-paper (deep-sleep):** budzenie do **najbliższej pełnej godziny**, ale
+  ceny day-ahead są niezmienne po publikacji, więc budzenie, którego godzina
+  jest już w **cache'u w RTC RAM, renderuje bez włączania Wi-Fi**. Sieć jest
+  używana tylko gdy: brakuje bieżącej godziny w cache'u, trwa polowanie na
+  jutro (12:00–16:00, co ~30 min), mija dobowy sync NTP / kontrola OTA,
+  wciśnięto przycisk („odśwież teraz") albo zbliża się zmiana czasu.
+- Przy awarii sieci odstępy prób rosną wykładniczo (60 s → 1 h), a ekran błędu
+  pojawia się dopiero po 3 kolejnych porażkach — krótka przerwa w sieci nie
+  kasuje ostatniego poprawnego ekranu.
 - Zawsze respektowany jest nagłówek `429 Retry-After`.
 
 ---
@@ -294,7 +324,11 @@ Testy znajdują się w [`test/`](test) (m.in. `test_parse`, `test_logic`,
 - HTTPS przez `WiFiClientSecure`; w wersji v1 domyślnie `setInsecure()` (pominięta
   weryfikacja certyfikatu) — akceptowalne dla urządzenia osobistego w sieci domowej.
   Pinowanie certyfikatu CA to udokumentowana opcja na przyszłość.
+- Portal konfiguracyjny jest chroniony **WPA2** (hasło losowane per uruchomienie,
+  widoczne tylko na ekranie urządzenia), a formularz **nie prefilluje** zapisanego
+  klucza API.
 - Klucz API trzymany w NVS, nigdy nie logowany w całości.
+- Aktualizacje OTA podpisane RSA-3072/SHA-256 z automatycznym rollbackiem.
 
 ---
 
