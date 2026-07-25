@@ -40,6 +40,15 @@ static const uint8_t  PCF8563_ADDR = 0x51;
 static const int      I2C_SDA = 18, I2C_SCL = 17;
 static const time_t   kTimeValid = 1700000000;
 
+// Battery thresholds, kept side by side so the asymmetry between them stays
+// visible. Below kBattImplausibleV the divider node simply isn't driven (no
+// cell, open cell, blown divider) -- that reading means "unknown", not "empty".
+// Reporting it as empty latched batteryLow, and because both OTA gates are
+// `!batLow`, it permanently disabled updates on such a board.
+static const float kBattImplausibleV = 0.5f;   // below this the reading is meaningless
+static const float kBattParkV        = 3.35f;  // deep-discharge floor: park, don't work
+static const float kBattLowV         = 3.45f;  // "low" badge + skip the ~2 MB OTA pull
+
 // Consecutive transient (network/parse) fetch failures, retained across deep sleep.
 // Lets a one-off cold-wake blip keep the last good e-paper image instead of wiping
 // it to an error screen; the error surfaces once after a sustained outage, and the
@@ -76,6 +85,10 @@ RTC_DATA_ATTR static uint32_t g_lastDrawSig = 0;
 RTC_DATA_ATTR static int32_t g_lastDeepCleanDay = 0;
 // Set once the deep-discharge screen has been painted; cleared on recovery.
 RTC_DATA_ATTR static uint8_t g_lowBattParked = 0;
+// Consecutive wakes that ended with no usable clock at all. Its own counter
+// because neither neighbour covers this branch: the early return precedes
+// g_wifiFail++, and a working association resets g_wifiFail anyway.
+RTC_DATA_ATTR static uint32_t g_clockFail = 0;
 
 static int bcd2dec(uint8_t b) { return (b >> 4) * 10 + (b & 0x0F); }
 static uint8_t dec2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
@@ -98,7 +111,11 @@ int SleepCycle::readBatteryPercent(bool& low, float& volts) {
   epd_poweroff();
   float pinMv = acc / 16.0f;
   volts = batteryVoltsFromPinMv(pinMv);
-  low = volts < 3.45f;
+  if (volts < kBattImplausibleV) {   // undriven node -> unknown, NOT nearly empty
+    low = false;                     // must not latch the `!batLow` OTA gates off
+    return -1;                       // EpdStatus::batteryPct == -1 renders as unknown
+  }
+  low = volts < kBattLowV;
   return batteryPercent(volts);
 }
 
@@ -139,14 +156,25 @@ void SleepCycle::sleepFor(uint32_t seconds) {
   rtc_gpio_pullup_en((gpio_num_t)PIN_BTN);
   rtc_gpio_pulldown_dis((gpio_num_t)PIN_BTN);
   esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN, 0);  // button (active low) wake
+  // ext0 is LEVEL-triggered: arming it while the pin is still LOW means the wake
+  // condition is already satisfied and the board wakes straight back up. If the
+  // release wait above timed out, rely on the timer alone for this sleep.
+  if (digitalRead(PIN_BTN) != LOW) {
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN, 0);  // button (active low) wake
+  }
   // Zero the EPD CFG shift register for the night. epd_poweroff() alone leaves
   // ep_scan_direction latched high in the (always-3.3V-powered) register, which
   // keeps driving the unpowered panel through deep sleep; epd_poweroff_all()
-  // clears every output (LilyGo's own pre-deep-sleep pattern for this board).
-  // Ordered rail shutdown first -- idempotent if the panel is already off.
-  epd_poweroff();
+  // clears every output.
+  //
+  // ORDER MATTERS, and it used to be wrong. epd_poweroff_all() is a memset over
+  // the whole CFG image, and power_disable is active HIGH (epd_base_init sets it,
+  // epd_poweron clears it) -- so running it LAST cleared power_disable and left
+  // the panel rail ENABLED for the entire sleep, the exact opposite of the
+  // intent. Clear the register first, then let epd_poweroff() push the final
+  // state: every other output zero AND power_disable set.
   epd_poweroff_all();
+  epd_poweroff();
   esp_deep_sleep_start();
 }
 
@@ -263,33 +291,27 @@ void SleepCycle::setup() {
   return;
 #endif
 
-  // A held button is caught below and opens the captive portal; a short-press
-  // (ext0) wake means "refresh now" and is forced through the network path by
+  // A held button opens the captive portal; a short-press (ext0) wake means
+  // "refresh now" and is forced through the network path by
   // needsNetwork(buttonWake=true) in the cache gate.
-  // 1) reconfigure if button held at boot, or if no saved config
   settings_.load();
-  if (buttonHeld(3000) || !settings_.isComplete()) {
-    char pskLine[40];
-    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
-                  WiFiProvisioner::portalPassword());
-    msgScreen(gfx_, "Konfiguracja", pskLine);
-    WiFiProvisioner prov;
-    prov.ensureConnected(settings_, /*forcePortal=*/true);
-    g_cache.count = 0;                // fresh config -> force a fetch next cycle
-    sleepFor(2);                      // wake immediately to run a normal cycle
-    return;
-  }
 
-  // 2) battery BEFORE Wi-Fi (ADC2 conflicts with Wi-Fi)
+  // 1) battery FIRST: ADC2 conflicts with Wi-Fi, and the portal below raises
+  // SoftAP -- so the reading has to precede both. It also gates the portal: an
+  // unattended first-boot portal must never run down an already-flat cell.
   bool batLow = false;
   float batVolts = 0.0f;
   int batPct = readBatteryPercent(batLow, batVolts);
   EpdStatus st; st.batteryPct = batPct; st.batteryLow = batLow;
 
-  // Deep-discharge floor: below ~3.35 V both the radio burst and the panel
+  bool held = buttonHeld(3000);
+  bool wantsPortal = held || !settings_.isComplete();
+
+  // 2) Deep-discharge floor: below ~3.35 V both the radio burst and the panel
   // flash abuse the cell. Park with one clear message and re-check every 6 h
-  // until a charger brings the voltage back.
-  if (batVolts > 0.5f && batVolts < 3.35f) {
+  // until a charger brings the voltage back. A HELD button overrides the park:
+  // a human is present, so servicing the board has to stay possible.
+  if (batVolts >= kBattImplausibleV && batVolts < kBattParkV && !held) {
     if (!g_lowBattParked) {
       msgScreen(gfx_, "Bateria rozladowana", "Podlacz ladowarke");
       g_lowBattParked = 1;
@@ -298,6 +320,30 @@ void SleepCycle::setup() {
     return;
   }
   g_lowBattParked = 0;
+
+  // 3) reconfigure: button held at boot, or no usable saved config
+  if (wantsPortal) {
+    char pskLine[40];
+    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
+                  WiFiProvisioner::portalPassword());
+    msgScreen(gfx_, "Konfiguracja", pskLine);
+    WiFiProvisioner prov;
+    prov.ensureConnected(settings_, /*forcePortal=*/true);
+    // Gate on the CONFIG, not on the connection. A portal that timed out (or was
+    // submitted without the API key) saves nothing, and the old unconditional
+    // sleepFor(2) then reopened it forever: ~99 % duty in SoftAP (~100 mA), a
+    // flat cell inside a day, with the deep-discharge park above never reached
+    // because this branch returns long before it.
+    if (settings_.isComplete()) {
+      g_cache.count = 0;              // fresh config -> force a fetch next cycle
+      g_authShown = 0; g_consecFail = 0; g_wifiFail = 0; g_clockFail = 0;
+      sleepFor(2);                    // wake immediately to run a normal cycle
+    } else {
+      msgScreen(gfx_, "Konfiguracja niepelna", "Przytrzymaj przycisk");
+      sleepFor(6u * 3600u);           // a held button reopens the portal at once (ext0)
+    }
+    return;
+  }
 
   // 3) seed clock from RTC so we have SOME time even if Wi-Fi fails. This is only
   // a fallback -- when Wi-Fi is up, NTP below overrides it (step 5). The RTC must
@@ -373,11 +419,21 @@ void SleepCycle::setup() {
   }
 
   time_t now = time(nullptr);
-  if (now < kTimeValid) {             // no clock at all -> short retry
-    msgScreen(gfx_, "Synchronizacja czasu...", "");
-    sleepFor(120);
+  if (now < kTimeValid) {             // no clock at all -> escalating retry
+    // Nothing can be drawn without a clock, and this branch used to sleep a flat
+    // 120 s and repaint the same full-screen message every single wake: ~15 %
+    // duty and 30 panel flashes an hour, indefinitely (a PCF8563 wiped by a deep
+    // discharge, or NTP blocked on the LAN). It needs its own counter -- see
+    // g_clockFail -- on the same backoff curve as its neighbours, and it must
+    // paint only once. Radio off first: the panel refresh below takes seconds.
+    g_clockFail++;
+    WiFi.disconnect(true, false);
+    WiFi.mode(WIFI_OFF);
+    if (g_clockFail == 1) msgScreen(gfx_, "Synchronizacja czasu...", "");
+    sleepFor(backoffSeconds(g_clockFail));
     return;
   }
+  g_clockFail = 0;
 
   uint32_t nextWake = 3600;
   bool okCycle = false;

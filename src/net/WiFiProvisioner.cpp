@@ -80,8 +80,15 @@ bool WiFiProvisioner::ensureConnected(Settings& s, bool forcePortal) {
 
   // The stored key is deliberately NOT prefilled: the form would serve it to
   // anyone who joins the portal. A blank submit keeps the current key (the
-  // length check below), so reconfiguring Wi-Fi never forces retyping it.
-  WiFiManagerParameter apiKeyParam("apikey", "Pstryk API key (puste = bez zmian)",
+  // length check below), so reconfiguring Wi-Fi never forces retyping it -- but
+  // only when there IS a current key. On first provisioning the field is
+  // REQUIRED, and the label has to say so: "puste = bez zmian" presented a
+  // mandatory field as optional, and a user who filled in Wi-Fi only ended up
+  // saved-but-incomplete with no hint about what was missing.
+  const bool firstRun = s.apiKey.length() == 0;
+  WiFiManagerParameter apiKeyParam("apikey",
+                                   firstRun ? "Pstryk API key (wymagany)"
+                                            : "Pstryk API key (puste = bez zmian)",
                                    "", 80);
   wm.addParameter(&apiKeyParam);
 
@@ -95,7 +102,10 @@ bool WiFiProvisioner::ensureConnected(Settings& s, bool forcePortal) {
     s.save();
     rememberAp();                // the portal may have joined a different AP
   }
-  return ok && WiFi.status() == WL_CONNECTED;
+  // isComplete() matters as much as the association: a portal that produced Wi-Fi
+  // credentials but no API key is not a usable configuration, and reporting it as
+  // success made the caller treat the board as provisioned.
+  return ok && WiFi.status() == WL_CONNECTED && s.isComplete();
 }
 
 }  // namespace pstryk
