@@ -8,6 +8,8 @@
 #include "net/OtaUpdater.h"
 #include "net/OtaRollback.h"
 #include <esp_task_wdt.h>
+#include <esp_attr.h>
+#include <esp_heap_caps.h>
 #include <cstdio>
 
 namespace pstryk {
@@ -19,6 +21,11 @@ static const time_t   kTimeValid = 1700000000;  // sanity threshold for a synced
 
 // Pages in rotation order; Jutro is skipped unless tomorrow is held.
 static const Page kPages[] = {Page::Teraz, Page::Chart, Page::Extremes, Page::Jutro};
+
+// Consecutive failed display inits. NOINIT (not DATA) so it survives the restart
+// it triggers but carries no meaning across a power cycle; the increment below
+// normalises whatever garbage a cold boot leaves here.
+RTC_NOINIT_ATTR static uint32_t g_bootFail;
 
 #ifdef PSTRYK_OTA_BOOTSTRAP
 // Installer image: provision Wi-Fi (+ API key into NVS for the real firmware), then
@@ -35,9 +42,16 @@ void App::runBootstrap() {
     renderMessage(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
   }
   if (!provisioner_.ensureConnected(settings_, /*forcePortal=*/needPortal)) {
+    // Restarting in a loop here makes the portal unreachable (the BOOT poll lives
+    // in loop(), which the installer never reaches). There is always a human at
+    // the USB port during bootstrap, so escalate straight to the portal.
     renderMessage(gfx_, "WiFi", "Blad polaczenia");
     delay(3000);
-    ESP.restart();
+    if (!provisioner_.ensureConnected(settings_, /*forcePortal=*/true)) {
+      renderMessage(gfx_, "WiFi", "Blad konfiguracji");
+      delay(3000);
+      ESP.restart();
+    }
   }
   OtaUpdater().runOnce(/*force=*/true);  // reboots into the installed release on success
   renderMessage(gfx_, "Blad instalacji", "Sprobuje za chwile");  // only reached on failure
@@ -46,10 +60,45 @@ void App::runBootstrap() {
 }
 #endif
 
+// Poll BOOT while waiting out a Wi-Fi backoff in setup(). loop() -- which
+// normally polls it -- is not running yet, and without this the captive portal is
+// unreachable for the whole time setup() is stuck retrying.
+bool App::waitForPortalRequest(uint32_t ms) {
+  uint32_t t0 = millis();
+  while (millis() - t0 < ms) {
+    if (digitalRead(PIN_BUTTON_BOOT) == LOW) {
+      delay(50);
+      if (digitalRead(PIN_BUTTON_BOOT) == LOW) return true;
+    }
+    delay(20);
+  }
+  return false;
+}
+
 void App::setup() {
   Serial.begin(115200);
   delay(200);
-  gfx_.begin();
+  pinMode(PIN_BUTTON_BOOT, INPUT_PULLUP);   // never relied on the strapping default
+  // A failed framebuffer allocation leaves _framebuffer == nullptr and the very
+  // next renderMessage() writes 640x180 pixels from address 0: StoreProhibited,
+  // reboot, repeat -- a blank screen and no diagnostics. Nothing can be shown
+  // without a framebuffer, so say why over Serial and stop instead of looping.
+  if (!gfx_.begin()) {
+    g_bootFail = (g_bootFail > 8u) ? 1u : g_bootFail + 1u;   // NOINIT: garbage-safe
+    Serial.printf("[boot] display init failed (attempt %lu, psram=%d, heap=%lu)\n",
+                  (unsigned long)g_bootFail, (int)psramFound(),
+                  (unsigned long)esp_get_free_heap_size());
+    if (g_bootFail >= 3u) { Serial.println("[boot] giving up"); while (true) delay(1000); }
+    delay(2000);
+    ESP.restart();
+  }
+  g_bootFail = 0;
+  // A working display + PSRAM is health enough for a just-OTA'd image, and this
+  // has to happen BEFORE the Wi-Fi gate below: with verifyRollbackLater() the core
+  // does not self-confirm, so any restart while still PENDING_VERIFY rolls the
+  // image back. Confirming after Wi-Fi meant one ~20 s AP outage in the first boot
+  // after an update silently reverted it. Same order as SleepCycle::setup().
+  confirmRunningImageValid();
   renderMessage(gfx_, "Pstryk", "Uruchamianie...");
 
   settings_.load();
@@ -68,13 +117,26 @@ void App::setup() {
   } else {
     renderMessage(gfx_, "WiFi", "Laczenie...");
   }
-  if (!provisioner_.ensureConnected(settings_, /*forcePortal=*/false)) {
-    renderMessage(gfx_, "WiFi", "Blad polaczenia");
-    delay(3000);
-    ESP.restart();
+  // Never restart unconditionally on a failed join. The only BOOT poll that
+  // reopens the captive portal lives in loop(), which setup() never reaches, so a
+  // persistent mismatch (changed Wi-Fi password, replaced router, board moved to
+  // another network) left this display cycling an error screen every ~19 s with no
+  // way back short of a USB reflash -- Settings::clear() is called from nowhere.
+  // Retry on the shared backoff curve, polling BOOT throughout: a transient outage
+  // still self-heals unattended, and a present human can force the portal at once.
+  for (uint32_t attempt = 1; !provisioner_.ensureConnected(settings_, false); ++attempt) {
+    char l2[24];
+    std::snprintf(l2, sizeof(l2), "Blad polaczenia (%lu)", (unsigned long)attempt);
+    renderMessage(gfx_, "WiFi", l2);
+    if (waitForPortalRequest(backoffSeconds(attempt) * 1000u)) {
+      char pskLine[40];
+      std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
+                    WiFiProvisioner::portalPassword());
+      renderMessage(gfx_, "Konfiguracja", pskLine);
+      if (provisioner_.ensureConnected(settings_, /*forcePortal=*/true)) break;
+      attempt = 0;                  // portal abandoned: back to plain joins
+    }
   }
-  // Display is up and Wi-Fi connected -> a just-OTA'd image is healthy; keep it.
-  confirmRunningImageValid();
 
   renderMessage(gfx_, "Czas", "Synchronizacja...");
   configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.google.com");

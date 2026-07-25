@@ -18,6 +18,7 @@ class App {
   void doFetch();
   void advancePage();
   void redraw();
+  bool waitForPortalRequest(uint32_t ms);   // poll BOOT while waiting; true if held
 #ifdef PSTRYK_OTA_BOOTSTRAP
   void runBootstrap();   // installer build: provision, force-install latest, reboot
 #endif
