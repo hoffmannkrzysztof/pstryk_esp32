@@ -44,7 +44,14 @@ static FetchResult attempt(const String& url, const String& authHeader, PriceDat
     return r;
   }
   if (code == 429) {
-    r.retryAfterSec = https.header("Retry-After").toInt();
+    // Clamp what the server asks for. Every sleep length this firmware computes
+    // itself has a ceiling (backoffSeconds -> 3600 s, secondsUntilNextWake ->
+    // 3605 s), but this one went straight into esp_sleep_enable_timer_wakeup() on
+    // the e-paper board and into a 32-bit millisecond multiply on the Long -- a
+    // "Retry-After: 86400" parked a wall display for a day. Out of range -> 0,
+    // which means "use the caller's default".
+    long retryAfter = https.header("Retry-After").toInt();
+    r.retryAfterSec = (retryAfter >= 60 && retryAfter <= 3600) ? (int)retryAfter : 0;
     r.status = FetchStatus::RateLimited;
   } else if (code == 401 || code == 403) {
     r.status = FetchStatus::AuthError;

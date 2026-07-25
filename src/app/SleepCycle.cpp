@@ -57,7 +57,9 @@ RTC_DATA_ATTR static uint32_t g_consecFail = 0;
 // Consecutive wakes that could not associate with Wi-Fi at all; same backoff curve.
 RTC_DATA_ATTR static uint32_t g_wifiFail = 0;
 // Set once the API-key error screen has been painted, so identical wakes don't
-// re-flash the same message (every drawMessage is a full panel clear+draw).
+// re-flash the same message (drawMessage is a full panel clear+draw). Cleared by
+// anything that takes the hint off screen -- a successful fetch, a cache repaint,
+// or any other message screen (see msgScreen) -- never on a timer.
 RTC_DATA_ATTR static uint8_t g_authShown = 0;
 // Last OTA-manifest check (epoch s), retained across deep sleep so we poll GitHub
 // at most once/day per device rather than every wake.
@@ -89,6 +91,10 @@ RTC_DATA_ATTR static uint8_t g_lowBattParked = 0;
 // because neither neighbour covers this branch: the early return precedes
 // g_wifiFail++, and a working association resets g_wifiFail anyway.
 RTC_DATA_ATTR static uint32_t g_clockFail = 0;
+// Consecutive 429s. Same shape as g_consecFail: the last good dashboard is worth
+// more than an immediate "rate limited" screen, and the API allows ~3 req/h while
+// one wake can spend all three on the in-cycle retry.
+RTC_DATA_ATTR static uint32_t g_rateFail = 0;
 
 static int bcd2dec(uint8_t b) { return (b >> 4) * 10 + (b & 0x0F); }
 static uint8_t dec2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
@@ -235,13 +241,27 @@ static uint32_t viewSignature(const PriceView& v, const EpdStatus& st) {
   mix((uint32_t)(v.hasTomorrow ? 1 : 0));
   mix((uint32_t)st.batteryPct);
   mix((uint32_t)(st.batteryLow ? 1 : 0));
+  mix((uint32_t)(st.stale ? 1 : 0));   // without this the marker could never appear
   return h == 0 ? 1u : h;   // 0 is reserved for "invalid -> must draw"
 }
 
-// Message screens replace the dashboard, so they invalidate its signature --
-// the next dashboard paint must never be skipped after an error screen.
-static void msgScreen(IRenderer& g, const char* line1, const char* line2) {
+// Message screens replace the dashboard, so they invalidate its signature -- the
+// next dashboard paint must never be skipped after an error screen.
+//
+// They also clear the "already told the user" latch. g_authShown was reset only by
+// a SUCCESSFUL fetch, so any other screen painted over the API-key hint (no Wi-Fi,
+// rate limit, flat battery, reconfigure) left the panel accusing the router while
+// the actual fault was the key -- at zero power, indefinitely.
+//
+// And they re-arm the daily deghost: a message screen can stay latched for hours
+// (up to 16 h on the AuthError path), so the dashboard that replaces it needs the
+// full 4-cycle clear, not the quick 2-cycle one meant for hourly refreshes. Before
+// the tiered deghost landed, present() cleared unconditionally and this was free.
+static void msgScreen(EpdRenderer& g, const char* line1, const char* line2) {
   g_lastDrawSig = 0;
+  g_authShown = 0;
+  g_lastDeepCleanDay = 0;      // next dashboard paint deghosts too
+  g.requestDeepClean();
   drawMessage(g, line1, line2);
 }
 
@@ -336,7 +356,8 @@ void SleepCycle::setup() {
     // because this branch returns long before it.
     if (settings_.isComplete()) {
       g_cache.count = 0;              // fresh config -> force a fetch next cycle
-      g_authShown = 0; g_consecFail = 0; g_wifiFail = 0; g_clockFail = 0;
+      g_authShown = 0; g_consecFail = 0; g_wifiFail = 0;
+      g_clockFail = 0; g_rateFail = 0;
       sleepFor(2);                    // wake immediately to run a normal cycle
     } else {
       msgScreen(gfx_, "Konfiguracja niepelna", "Przytrzymaj przycisk");
@@ -378,6 +399,12 @@ void SleepCycle::setup() {
         char clk[6]; std::snprintf(clk, sizeof(clk), "%02d:%02d", lt.tm_hour, lt.tm_min);
         st.clockHHMM = clk;
         st.wifiOk = true;             // radio deliberately off, not a failure
+        // Painting from the cache broke the old invariant "a dashboard on screen
+        // means a fetch confirmed this cycle", which is why EpdStatus::stale
+        // existed but was never assigned. The criterion is a confirmed run of
+        // failures, NOT elapsed time: working from cache for many hours is the
+        // intended behaviour once tomorrow's frames are in.
+        st.stale = (g_consecFail > 0 || g_wifiFail > 0 || g_rateFail > 0);
         uint32_t sig = viewSignature(cachedView, st);
         if (sig != g_lastDrawSig) {   // skip the flash when nothing changed
           if (localDayOrdinal(seedNow) != g_lastDeepCleanDay) {
@@ -386,6 +413,7 @@ void SleepCycle::setup() {
           }
           drawDashboard(gfx_, cachedView, st);
           g_lastDrawSig = sig;
+          g_authShown = 0;            // the key hint (if any) is off screen now
         }
         sleepFor(secondsUntilNextWake(time(nullptr), cachedView.hasTomorrow));
         return;
@@ -454,6 +482,7 @@ void SleepCycle::setup() {
     }
     if (res.status == FetchStatus::Ok) {
       g_consecFail = 0;
+      g_rateFail = 0;
       g_authShown = 0;
       okCycle = true;
       cacheStore(data);                         // feed the radio-free wakes
@@ -490,8 +519,15 @@ void SleepCycle::setup() {
       }
       nextWake = 4u * 3600u;
     } else if (res.status == FetchStatus::RateLimited) {
-      msgScreen(gfx_, "Limit zapytan", "Sprobuje pozniej");
-      nextWake = res.retryAfterSec > 0 ? (uint32_t)res.retryAfterSec : 1200;
+      // Same policy as the transient branch below: the e-paper holds its last good
+      // image at zero power, so a single 429 must not replace it with an error
+      // screen. That was the one failure path that wiped the dashboard on the FIRST
+      // occurrence -- reachable just by pressing refresh a few times in an hour,
+      // while the cache still held valid frames for the current hour.
+      g_rateFail++;
+      if (g_rateFail == 3) msgScreen(gfx_, "Limit zapytan", "Sprobuje pozniej");
+      nextWake = res.retryAfterSec > 0 ? (uint32_t)res.retryAfterSec
+                                       : backoffSeconds(g_rateFail);
     } else {
       // Transient network/parse error AFTER the in-cycle retries. The e-paper holds its
       // last good image at zero power, so don't wipe it for a brief blip -- surface the
