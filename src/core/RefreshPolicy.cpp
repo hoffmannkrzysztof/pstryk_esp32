@@ -7,7 +7,14 @@ Window computeWindow(time_t now) {
   Window w;
   time_t midnight = localMidnightUtc(now);
   formatIso8601Utc(midnight, w.start);
-  formatIso8601Utc(midnight + 48 * 3600, w.end);
+  // End on local midnight of day+2, computed through the CALENDAR. A flat
+  // +48*3600 is not two local days across a DST change: on 2026-10-25 (25 h) it
+  // ended at 23:00 local on the 26th, and with the half-open [start,end) window
+  // the API never returned the 23:00-24:00 frame -- so "Jutro" charted 23 bars and
+  // tomorrowCheapest could miss the cheapest hour of the day. +50 h lands inside
+  // day+2 for a 23 h, 24 h or 25 h day, and the second localMidnightUtc() snaps it
+  // back to the boundary. Unchanged on ordinary days.
+  formatIso8601Utc(localMidnightUtc(midnight + 50 * 3600), w.end);
   return w;
 }
 

@@ -14,6 +14,30 @@ void test_window_is_local_midnight_plus_48h() {
   TEST_ASSERT_EQUAL_STRING("2026-06-03T22:00:00Z", w.end);    // +48h
 }
 
+// The window must end on local midnight of day+2, which is NOT start+48h on a DST
+// day. With a flat +48h and the half-open [start,end) window the API never returned
+// the 23:00-24:00 frame, so "Jutro" charted 23 bars and tomorrowCheapest could miss
+// the cheapest hour of the day. Both the transition day and the one before it.
+void test_window_spans_two_local_days_on_dst_fall_back() {
+  // 2026-10-25 is the 25 h day (CEST -> CET at 03:00 local).
+  Window w = computeWindow(parseIso8601Utc("2026-10-25T09:30:00Z"));
+  TEST_ASSERT_EQUAL_STRING("2026-10-24T22:00:00Z", w.start);  // 00:00 local 10-25
+  TEST_ASSERT_EQUAL_STRING("2026-10-26T23:00:00Z", w.end);    // 00:00 local 10-27 (CET)
+}
+
+void test_window_spans_two_local_days_on_day_before_fall_back() {
+  Window w = computeWindow(parseIso8601Utc("2026-10-24T09:30:00Z"));
+  TEST_ASSERT_EQUAL_STRING("2026-10-23T22:00:00Z", w.start);  // 00:00 local 10-24
+  TEST_ASSERT_EQUAL_STRING("2026-10-25T23:00:00Z", w.end);    // 00:00 local 10-26 (CET)
+}
+
+void test_window_spans_two_local_days_on_dst_spring_forward() {
+  // 2026-03-29 is the 23 h day (CET -> CEST at 02:00 local).
+  Window w = computeWindow(parseIso8601Utc("2026-03-29T09:30:00Z"));
+  TEST_ASSERT_EQUAL_STRING("2026-03-28T23:00:00Z", w.start);  // 00:00 local 03-29 (CET)
+  TEST_ASSERT_EQUAL_STRING("2026-03-30T22:00:00Z", w.end);    // 00:00 local 03-31 (CEST)
+}
+
 void test_base_cadence_30min_before_noon() {
   time_t now = parseIso8601Utc("2026-06-02T07:00:00Z");  // 09:00 local
   TEST_ASSERT_EQUAL_UINT32(30u * 60u * 1000u, nextRefreshMs(now, false));
@@ -133,6 +157,9 @@ void test_dst_switch_window_forces_network() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_window_is_local_midnight_plus_48h);
+  RUN_TEST(test_window_spans_two_local_days_on_dst_fall_back);
+  RUN_TEST(test_window_spans_two_local_days_on_day_before_fall_back);
+  RUN_TEST(test_window_spans_two_local_days_on_dst_spring_forward);
   RUN_TEST(test_base_cadence_30min_before_noon);
   RUN_TEST(test_awaiting_tomorrow_20min_after_noon);
   RUN_TEST(test_after_noon_with_tomorrow_back_to_30min);
