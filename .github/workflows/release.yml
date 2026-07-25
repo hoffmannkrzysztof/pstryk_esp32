@@ -20,12 +20,23 @@ jobs:
       - name: Install PlatformIO and signing deps
         run: pip install --upgrade platformio cryptography
 
-      - name: Derive version
+      - name: Derive and validate version
         id: ver
         run: |
+          set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          # Hard gate. The tag goes verbatim into FIRMWARE_VERSION and into the
+          # manifest, and there is no recovery path from a bad one: a tag containing
+          # "-dev" used to disable self-update permanently on every device that
+          # installed it, and a "-rc1" tag makes the matching final release look
+          # not-newer, stranding the fleet on the prerelease.
+          if [[ ! "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must be vMAJOR.MINOR.PATCH with no suffix, got '$TAG'"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "ver=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
 
       - name: Inject firmware version
         env:
@@ -37,14 +48,18 @@ jobs:
           pio run -e t5_epaper_s3
           pio run -e tdisplay_long
 
-      - name: Fetch signing tool
-        run: curl -fsSL https://raw.githubusercontent.com/espressif/arduino-esp32/master/tools/bin_signing.py -o bin_signing.py
-
       - name: Restore signing key
-        run: printf '%s' "${{ secrets.OTA_SIGNING_KEY }}" > private_key.pem
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+        run: printf '%s' "$OTA_SIGNING_KEY" > private_key.pem
 
-      - name: Extract public key (for self-verify)
-        run: python bin_signing.py --extract-pubkey private_key.pem --out public_key.pem
+      # The signature is the ONLY trust anchor for OTA on both boards, so verify
+      # against the public key that is actually COMPILED INTO the firmware, not one
+      # re-extracted from the private key we just signed with. The latter check was
+      # circular: it passed even if the embedded key and the signing key had drifted
+      # apart -- the one failure that bricks OTA for every device in the field.
+      - name: Reconstruct the firmware's embedded public key
+        run: python tools/extract_embedded_pubkey.py --out embedded_public_key.pem
 
       - name: Sign, verify, and write manifests
         env:
@@ -55,12 +70,18 @@ jobs:
           set -euo pipefail
           sign_board () {
             env="$1"; board="$2"
-            python bin_signing.py --bin ".pio/build/$env/firmware.bin" --key private_key.pem --out "firmware-$board.bin"
-            python bin_signing.py --verify "firmware-$board.bin" --pubkey public_key.pem
+            python tools/bin_signing.py --bin ".pio/build/$env/firmware.bin" --key private_key.pem --out "firmware-$board.bin"
+            python tools/bin_signing.py --verify "firmware-$board.bin" --pubkey embedded_public_key.pem
             size=$(stat -c%s "firmware-$board.bin")
             sha=$(sha256sum "firmware-$board.bin" | cut -d' ' -f1)
-            printf '{"board":"%s","version":"%s","url":"https://github.com/%s/releases/download/%s/firmware-%s.bin","size":%s,"sha256":"%s"}\n' \
-              "$board" "$VER" "$REPO" "$TAG" "$board" "$size" "$sha" > "manifest-$board.json"
+            # The URL is built from v$VER, not $TAG: OtaUpdater rebuilds this exact
+            # string from the manifest's own board+version and refuses anything else,
+            # which is what binds a claimed version to a real artifact (and stops a
+            # MITM pointing a "99.0.0" manifest at an old signed binary). The tag
+            # gate above guarantees $TAG == v$VER, so this is the same value stated
+            # in the form the firmware can reconstruct.
+            printf '{"board":"%s","version":"%s","url":"https://github.com/%s/releases/download/v%s/firmware-%s.bin","size":%s,"sha256":"%s"}\n' \
+              "$board" "$VER" "$REPO" "$VER" "$board" "$size" "$sha" > "manifest-$board.json"
           }
           sign_board t5_epaper_s3 epaper
           sign_board tdisplay_long amoled
@@ -76,4 +97,4 @@ jobs:
 
       - name: Scrub key material
         if: always()
-        run: rm -f private_key.pem public_key.pem
+        run: rm -f private_key.pem embedded_public_key.pem

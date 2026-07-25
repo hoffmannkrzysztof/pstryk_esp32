@@ -30,7 +30,15 @@ bool isNewer(const char* candidate, const char* current) {
 
 bool isDevVersion(const char* v) {
   if (!v || !*v) return true;
-  return std::strstr(v, "-dev") != nullptr;
+  // EXACT match on the sentinel, not an unanchored substring search. As a substring
+  // test, any release tag containing "-dev" (say v1.4.0-dev1) turned self-update off
+  // PERMANENTLY on every device that installed it: parse3 ignores the suffix, so
+  // isNewer said yes, the board installed it, and from then on shouldApplyUpdate()
+  // refused every future manifest -- with no recovery path short of a USB reflash
+  // (the field paths all pass force=false, and FIRMWARE_VERSION is a #define, so
+  // neither the portal nor a factory reset can change it). The release workflow now
+  // also rejects a tag that isn't plain vMAJOR.MINOR.PATCH; this is the second lock.
+  return std::strcmp(v, "0.0.0-dev") == 0;
 }
 
 }  // namespace pstryk

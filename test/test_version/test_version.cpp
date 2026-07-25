@@ -18,6 +18,14 @@ void test_dev_is_dev() {
   TEST_ASSERT_TRUE(isDevVersion(nullptr));
 }
 void test_release_not_dev() { TEST_ASSERT_FALSE(isDevVersion("1.0.0")); }
+// A release tag that merely CONTAINS the sentinel must not disable self-update:
+// as an unanchored strstr this permanently bricked OTA on any device that installed
+// such a build. The workflow rejects these tags now, but the check is anchored too.
+void test_prerelease_tag_is_not_dev() {
+  TEST_ASSERT_FALSE(isDevVersion("1.4.0-dev1"));
+  TEST_ASSERT_FALSE(isDevVersion("1.4.0-rc1"));
+  TEST_ASSERT_FALSE(isDevVersion("2.0.0-devel"));
+}
 void test_bare_zero_not_dev() { TEST_ASSERT_FALSE(isDevVersion("0.0.0")); }
 void test_mixed_prefix() { TEST_ASSERT_TRUE(isNewer("v1.2.0", "1.1.0")); }
 
@@ -31,6 +39,7 @@ int main(int, char**) {
   RUN_TEST(test_leading_v_ignored);
   RUN_TEST(test_dev_is_dev);
   RUN_TEST(test_release_not_dev);
+  RUN_TEST(test_prerelease_tag_is_not_dev);
   RUN_TEST(test_bare_zero_not_dev);
   RUN_TEST(test_mixed_prefix);
   return UNITY_END();
