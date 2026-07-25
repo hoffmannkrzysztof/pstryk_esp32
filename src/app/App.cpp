@@ -289,8 +289,10 @@ void App::loop() {
       // A slow-link OTA download may legitimately exceed the WDT window; it
       // either reboots into the new image or returns here.
       esp_task_wdt_delete(nullptr);
-      OtaUpdater().runOnce();
+      OtaResult ota = OtaUpdater().runOnce();
       esp_task_wdt_add(nullptr);
+      // A failed check shouldn't cost a full day before the next attempt.
+      if (ota != OtaResult::NoUpdate) nextOtaCheckAtMs_ = now + 4u * 60u * 60u * 1000u;
     }
   }
 

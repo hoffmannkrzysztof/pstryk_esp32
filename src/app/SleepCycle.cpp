@@ -463,6 +463,20 @@ void SleepCycle::setup() {
   }
   g_clockFail = 0;
 
+  // OTA check: after NTP (dueForOtaCheck needs a clock), before the fetch and the
+  // paint, and INDEPENDENT of the fetch result. It used to sit inside the
+  // FetchStatus::Ok branch, so a board whose fetch failed on every wake never
+  // checked for updates -- a release that broke the parser could not be fixed
+  // remotely on exactly the devices that needed the fix. Still skipped on a low
+  // cell: a ~2 MB download there risks a brownout mid-flash.
+  if (wifi && !batLow && dueForOtaCheck(g_lastOtaCheck, (uint32_t)now, 24u * 3600u)) {
+    OtaResult ota = OtaUpdater().runOnce();   // reboots into the new image on success
+    // A failed check must not burn the whole day, nor retry on every wake (each
+    // attempt is a full TLS session): come back in ~4 h instead of 24 h.
+    g_lastOtaCheck = (ota == OtaResult::NoUpdate) ? (uint32_t)now
+                                                 : (uint32_t)now - 20u * 3600u;
+  }
+
   uint32_t nextWake = 3600;
   bool okCycle = false;
   if (wifi) {
@@ -487,14 +501,6 @@ void SleepCycle::setup() {
       okCycle = true;
       cacheStore(data);                         // feed the radio-free wakes
       view = buildView(data, now);
-      // Opportunistic OTA BEFORE the paint: it needs Wi-Fi, and on an update it
-      // reboots into the new image -- painting first would waste a full panel
-      // flash. Rate-limited to once/day; skipped on a low cell (a ~2 MB
-      // download there risks a brownout mid-flash).
-      if (!batLow && dueForOtaCheck(g_lastOtaCheck, (uint32_t)now, 24u * 3600u)) {
-        g_lastOtaCheck = (uint32_t)now;
-        OtaUpdater().runOnce();
-      }
       // Radio off for the slow (~2-2.5 s) e-paper refresh; nothing below needs it.
       WiFi.disconnect(true, false);
       WiFi.mode(WIFI_OFF);

@@ -20,6 +20,20 @@ static const char* kManifestBase =
 // is the overwhelmingly common case.
 RTC_DATA_ATTR static char g_manifestEtag[64] = "";
 
+// The RSA signature authenticates the IMAGE BYTES and nothing else -- not the
+// version the manifest claimed, not the URL it pointed at. The manifest arrives
+// over TLS with setInsecure(), so a MITM could hand us a "version 99.0.0" manifest
+// aimed at a genuine, correctly-signed OLD release and force a downgrade; v1.0.1
+// shipped a portal with no password, no timeout and the API key prefilled into the
+// form. Rebuilding the asset URL FROM the manifest's own fields and demanding an
+// exact match binds the claimed version to the artifact path: claiming 99.0.0 then
+// requires a v99.0.0 release to actually exist under this repo.
+// Keep in sync with .github/workflows/release.yml.
+static String expectedAssetUrl(const OtaManifest& m) {
+  return String("https://github.com/hoffmannkrzysztof/pstryk_esp32/releases/download/v") +
+         m.version.c_str() + "/firmware-" + m.board.c_str() + ".bin";
+}
+
 OtaResult OtaUpdater::runOnce(bool force) {
   // 1) Fetch this board's manifest.
   String manifestUrl = String(kManifestBase) + PSTRYK_BOARD_ID + ".json";
@@ -45,11 +59,19 @@ OtaResult OtaUpdater::runOnce(bool force) {
     mHttp.end();
     return OtaResult::FetchError;
   }
-  if (mHttp.hasHeader("ETag")) {
-    strlcpy(g_manifestEtag, mHttp.header("ETag").c_str(), sizeof(g_manifestEtag));
-  }
+  String etag = mHttp.hasHeader("ETag") ? mHttp.header("ETag") : String();
   String body = mHttp.getString();
   mHttp.end();
+  // The ETag used to be persisted right here, before the decision gate, the
+  // download, the signature check and the flash write. Every failure after this
+  // point then left it behind, so the next check ended in a 304 and the board
+  // SKIPPED that release for good -- waiting for the next publish instead of
+  // retrying the one that failed. Drop it now and re-commit it only where the
+  // conclusion is genuinely "nothing to install".
+  g_manifestEtag[0] = '\0';
+  auto keepEtag = [&etag]() {
+    if (!etag.isEmpty()) strlcpy(g_manifestEtag, etag.c_str(), sizeof(g_manifestEtag));
+  };
   if (body.isEmpty()) return OtaResult::FetchError;
 
   OtaManifest m;
@@ -61,10 +83,20 @@ OtaResult OtaUpdater::runOnce(bool force) {
   if (force) {
     if (m.board != PSTRYK_BOARD_ID) {
       log_e("OTA: manifest board '%s' != '%s'", m.board.c_str(), PSTRYK_BOARD_ID);
+      keepEtag();
       return OtaResult::NoUpdate;
     }
   } else if (!shouldApplyUpdate(m, FIRMWARE_VERSION, PSTRYK_BOARD_ID)) {
+    keepEtag();                      // nothing to install: safe to 304 next time
     return OtaResult::NoUpdate;
+  }
+  // 2b) The asset URL must be exactly the one release.yml derives from these very
+  //     manifest fields -- see expectedAssetUrl(). This is what stops an unpinned
+  //     host and a version/binary mismatch (forced downgrade).
+  String expectedUrl = expectedAssetUrl(m);
+  if (expectedUrl != m.url.c_str()) {
+    log_e("OTA: manifest url '%s' != expected '%s'", m.url.c_str(), expectedUrl.c_str());
+    return OtaResult::ParseError;
   }
   log_i("OTA: %s %s -> %s", force ? "installing" : "updating", FIRMWARE_VERSION, m.version.c_str());
 
@@ -85,6 +117,13 @@ OtaResult OtaUpdater::runOnce(bool force) {
   int contentLen = fHttp.getSize();
   if (contentLen <= 0) { fHttp.end(); return OtaResult::FetchError; }
   size_t total = (size_t)contentLen;
+  // m.size was parsed and then never used ("informational"). Enforce it: the
+  // manifest and the asset disagreeing on length is never legitimate.
+  if (m.size > 0 && (unsigned long)total != m.size) {
+    log_e("OTA size mismatch: manifest %lu, asset %u", m.size, (unsigned)total);
+    fHttp.end();
+    return OtaResult::FetchError;
+  }
 
   // 4) Install signature verification BEFORE begin(); begin() takes the TOTAL size
   //    (firmware + appended signature). end() performs the verification.
