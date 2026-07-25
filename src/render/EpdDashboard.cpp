@@ -3,6 +3,7 @@
 #include "core/Version.h"
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <vector>
 
 namespace pstryk {
@@ -73,19 +74,28 @@ void drawChart(IRenderer& r, const Pal& p, const std::vector<Bar>& bars,
   float top = maxP * 1.12f;
   float bottom = (minP < 0.0f) ? minP * 1.12f : 0.0f;
   float span = top - bottom;
+  // The EPD rasteriser bounds its pixel WRITES but not its loop counts, so every
+  // float->int conversion has to be bounded on our side: (int)NaN saturates to
+  // INT_MAX on Xtensa and epd_fill_rect would then iterate that many times.
+  if (!std::isfinite(span) || span <= 0.0f) return;
   int zeroY = y + (int)((top / span) * h);
+  if (zeroY < y) zeroY = y;
+  if (zeroY > y + h) zeroY = y + h;
   int gap = 2, bw = (w - (n - 1) * gap) / n; if (bw < 1) bw = 1;
   for (int i = 0; i < n; ++i) {
     float ap = bars[i].price >= 0.0f ? bars[i].price : -bars[i].price;
     int bh = (int)((ap / span) * h); if (bh < 2) bh = 2;
+    if (bh > h) bh = h;
     int bx = x + i * (bw + gap);
     int by = bars[i].price >= 0.0f ? zeroY - bh : zeroY;
+    if (by < y) { bh -= (y - by); by = y; }
+    if (bh < 1) continue;
     if (by + bh > y + h) bh = y + h - by;   // clamp a rounded-up negative stub
     uint16_t c = (bars[i].price >= avg) ? p.dark : p.light;
     r.fillRect(bx, by, bw, bh, c);
     if (i == liveIdx) r.drawRect(bx - 1, by - 1, bw + 2, bh + 2, p.ink);
   }
-  int ay = zeroY - (int)((avg / span) * h);
+  int ay = std::isfinite(avg) ? zeroY - (int)((avg / span) * h) : y + h - 1;
   if (ay < y) ay = y;
   if (ay > y + h - 1) ay = y + h - 1;       // keep the dashes inside the chart
   for (int dx = x; dx < x + w; dx += 10) r.drawLine(dx, ay, dx + 5, ay, p.ink);
@@ -129,30 +139,49 @@ void drawDashboard(IRenderer& r, const PriceView& v, const EpdStatus& st) {
   r.drawLine(M, sy, W - M, sy, p.mid);
 
   // --- hero (left): label, big 7-seg price, below/above-average pill ---
+  // hasData does not imply a frame covering this hour: a gap in frames[] (partial
+  // API publish, a re-priced frame) used to render the default 0.00 as an
+  // authoritative "TERAZ 00:00" beside a real daily average -- internally
+  // contradictory rather than obviously broken.
   char hl[6]; hourLabel(v.currentHour, hl);
-  char head[24]; std::snprintf(head, sizeof(head), "TERAZ %s", hl);
+  char head[24];
+  std::snprintf(head, sizeof(head), "TERAZ %s", v.hasCurrent ? hl : "--:--");
   int heroY = sy + 12;
   r.text(M, heroY, head, p.ink, 2);
 
   int priceY = heroY + LH + 8, priceH = 150;
-  formatPln(v.currentBuy, buf);
+  const int rx = 580;                       // right column; hero must stay left of it
+  if (v.hasCurrent) formatPln(v.currentBuy, buf);
+  else              std::strcpy(buf, "--,--");
   int endx = drawBigPrice(r, p, M, priceY, priceH, buf);
-  r.text(endx + 16, priceY + priceH - LH, "zl/kWh", p.ink, 2);
+  // The unit label sits after the price, and the sign added by the negative-price
+  // fix costs a full digit cell -- enough for "-0,45 zl/kWh" to cross the column
+  // separator. Drop the label under the price when it no longer fits.
+  int unitW = r.textWidth("zl/kWh", 2);
+  if (endx + 16 + unitW <= rx - 26) r.text(endx + 16, priceY + priceH - LH, "zl/kWh", p.ink, 2);
+  else                              r.text(M, priceY + priceH + 2, "zl/kWh", p.ink, 2);
 
-  int pillY = priceY + priceH + 16;
-  const char* tag = v.currentBelowAvg ? "ponizej sredniej" : "powyzej sredniej";
-  r.drawRect(M, pillY, r.textWidth(tag, 1) + 28, LB + 12, p.ink);
-  r.text(M + 14, pillY + 6, tag, p.ink, 1);
+  int pillY = priceY + priceH + 16 + (endx + 16 + unitW <= rx - 26 ? 0 : LH);
+  if (v.hasCurrent) {                       // no average comparison without a price
+    const char* tag = v.currentBelowAvg ? "ponizej sredniej" : "powyzej sredniej";
+    r.drawRect(M, pillY, r.textWidth(tag, 1) + 28, LB + 12, p.ink);
+    r.text(M + 14, pillY + 6, tag, p.ink, 1);
+  }
 
   // --- hero right column: next / sell / average (label + value per line) ---
-  int rx = 580, ry = heroY, rstep = LB + 12;
+  int ry = heroY, rstep = LB + 12;
   r.drawLine(rx - 26, heroY, rx - 26, pillY + LB, p.mid);
   char nh[6]; hourLabel(v.nextHour, nh);
-  formatPln(v.nextBuy, buf);
-  std::snprintf(line, sizeof(line), "Nastepna %s:  %s %s", nh, buf,
-                v.nextTrend == Trend::Up ? "^" : (v.nextTrend == Trend::Down ? "v" : "-"));
+  if (v.hasNext) {
+    formatPln(v.nextBuy, buf);
+    std::snprintf(line, sizeof(line), "Nastepna %s:  %s %s", nh, buf,
+                  v.nextTrend == Trend::Up ? "^" : (v.nextTrend == Trend::Down ? "v" : "-"));
+  } else {
+    std::snprintf(line, sizeof(line), "Nastepna --:--:  --,--");
+  }
   r.text(rx, ry, line, p.ink, 1);
   formatPln(v.currentSell, buf);
+  if (!v.hasCurrent) std::strcpy(buf, "--,--");   // same source frame as the hero
   std::snprintf(line, sizeof(line), "Sprzedaz PV:  %s", buf);
   r.text(rx, ry + rstep, line, p.ink, 1);
   formatPln(v.todayAvg, buf);

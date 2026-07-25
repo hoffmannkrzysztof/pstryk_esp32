@@ -1,6 +1,7 @@
 #include "core/PstrykParse.h"
 #include "core/TimeService.h"
 #include <ArduinoJson.h>
+#include <cmath>
 
 namespace pstryk {
 
@@ -24,7 +25,15 @@ bool parsePricing(const char* json, PriceData& out) {
     JsonVariantConst pg = p["price_gross"];
     if (pg.isNull()) continue;
     f.buy         = pg.as<float>();
+    // ArduinoJson reports no error on exponent overflow (1e400 -> inf) and
+    // as<float>() is a bare static_cast, so an infinity can reach the renderers.
+    // There it becomes span=inf -> price/span=NaN -> (int)NaN, which on Xtensa
+    // saturates to INT_MAX and turns a bar into a ~INT_MAX-iteration fill loop.
+    // Reject it HERE: cacheStore() persists these floats verbatim into RTC RAM, so
+    // a poisoned frame would otherwise survive every reboot.
+    if (!std::isfinite(f.buy)) continue;
     f.sell        = p["price_prosumer_gross"] | 0.0f;
+    if (!std::isfinite(f.sell)) f.sell = 0.0f;
     f.isCheap     = p["is_cheap"]     | false;
     f.isExpensive = p["is_expensive"] | false;
     // The API does not emit `is_live`; the current frame is derived from the

@@ -69,6 +69,7 @@ PriceView buildView(const PriceData& data, time_t now) {
     // hour here: drives liveIndex and the chart's live-bar ring.
     v.liveIndex = cur;
     v.today[cur].isLive = true;
+    v.hasCurrent = true;
     v.currentBuy = v.today[cur].price;
     v.currentHour = v.today[cur].hour;
     v.currentBelowAvg = v.currentBuy <= v.todayAvg;
@@ -76,10 +77,19 @@ PriceView buildView(const PriceData& data, time_t now) {
     // is ambiguous on the 25 h DST day)
     for (const PriceFrame& f : data.frames)
       if (now >= f.start && now < f.start + 3600) { v.currentSell = f.sell; break; }
-    // next hour trend
-    if (cur + 1 < (int)v.today.size()) {
-      v.nextBuy = v.today[cur + 1].price;
-      v.nextHour = v.today[cur + 1].hour;
+    // Next hour trend. At 23:00 there is no today[cur+1], and the real 00:00 price
+    // is sitting unused in tomorrow[0] -- so both boards used to print
+    // "Nastepna 00:00: 0,00" every night, exactly when the decision is "run it now
+    // or wait for midnight". Fall back to tomorrow's first frame; when the
+    // day-ahead auction has not published yet, hasNext stays false and the
+    // renderers show a placeholder instead of a fabricated 0.00.
+    const Bar* next = nullptr;
+    if (cur + 1 < (int)v.today.size())  next = &v.today[cur + 1];
+    else if (!v.tomorrow.empty())       next = &v.tomorrow[0];
+    if (next) {
+      v.hasNext = true;
+      v.nextBuy = next->price;
+      v.nextHour = next->hour;
       float d = v.nextBuy - v.currentBuy;
       v.nextTrend = (d > 0.001f) ? Trend::Up : (d < -0.001f ? Trend::Down : Trend::Flat);
     }

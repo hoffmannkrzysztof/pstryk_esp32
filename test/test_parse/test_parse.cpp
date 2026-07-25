@@ -2,6 +2,7 @@
 #include "core/PstrykParse.h"
 #include "core/TimeService.h"
 #include "../fixtures.h"
+#include <cmath>
 
 using namespace pstryk;
 
@@ -85,6 +86,14 @@ void test_negative_price_preserved() {
   TEST_ASSERT_FLOAT_WITHIN(0.001, -0.05f, d.frames[1].sell);
 }
 
+void test_infinite_price_frame_is_skipped() {
+  PriceData d;
+  TEST_ASSERT_TRUE(parsePricing(kPricingInfiniteJson, d));
+  TEST_ASSERT_EQUAL_UINT(1, d.frames.size());          // the inf frame dropped
+  TEST_ASSERT_FLOAT_WITHIN(0.001, 0.52f, d.frames[0].buy);
+  TEST_ASSERT_TRUE(std::isfinite(d.frames[0].buy));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_parses_all_frames);
@@ -97,5 +106,6 @@ int main(int, char**) {
   RUN_TEST(test_frames_without_price_gross_return_false);
   RUN_TEST(test_null_priced_placeholder_frames_are_skipped);
   RUN_TEST(test_negative_price_preserved);
+  RUN_TEST(test_infinite_price_frame_is_skipped);
   return UNITY_END();
 }

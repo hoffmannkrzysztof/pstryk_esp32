@@ -46,6 +46,47 @@ void test_next_hour_trend() {
   TEST_ASSERT_FLOAT_WITHIN(0.001, 0.48f, v.nextBuy);
 }
 
+// hasData means "frames parsed", NOT "a frame covers this hour". 12:30Z is 14:30
+// local, past the last today frame (06:00-10:00Z = 08:00-12:00 local) but still the
+// same local day -- so the split is non-empty and hasData is true. The hero fields
+// must stay flagged as absent instead of presenting the default 0.00 as the live
+// price next to a real daily average.
+void test_no_frame_for_current_hour_is_flagged_absent() {
+  PriceData d;
+  parsePricing(kPricingJson, d);
+  PriceView v = buildView(d, parseIso8601Utc("2026-06-02T12:30:00Z"));
+  TEST_ASSERT_TRUE(v.hasData);
+  TEST_ASSERT_FALSE(v.hasCurrent);
+  TEST_ASSERT_EQUAL_INT(-1, v.liveIndex);
+  TEST_ASSERT_FALSE(v.hasNext);
+}
+
+// Last frame of the local day: there is no today[cur+1], and the real next price
+// sits in tomorrow[0]. Both boards used to print "Nastepna 00:00: 0,00" here.
+void test_last_today_hour_falls_back_to_tomorrow() {
+  PriceData d;
+  parsePricing(kPricingJson, d);
+  // 09:30Z == 11:30 local, inside the 4th (last) today frame at 1.12.
+  PriceView v = buildView(d, parseIso8601Utc("2026-06-02T09:30:00Z"));
+  TEST_ASSERT_TRUE(v.hasCurrent);
+  TEST_ASSERT_EQUAL_INT(3, v.liveIndex);            // last today bar
+  TEST_ASSERT_FLOAT_WITHIN(0.001, 1.12f, v.currentBuy);
+  TEST_ASSERT_TRUE(v.hasNext);                      // came from tomorrow[0]
+  TEST_ASSERT_FLOAT_WITHIN(0.001, 0.40f, v.nextBuy);
+  TEST_ASSERT_EQUAL_INT((int)Trend::Down, (int)v.nextTrend);
+}
+
+// Same last-frame position, but tomorrow has not published: nothing to fall back
+// to, so hasNext must stay false rather than reporting a fabricated 0.00.
+void test_last_today_hour_without_tomorrow_has_no_next() {
+  PriceData d;
+  parsePricing(kPricingTodayOnlyJson, d);
+  PriceView v = buildView(d, parseIso8601Utc("2026-06-02T07:30:00Z"));
+  TEST_ASSERT_TRUE(v.hasCurrent);
+  TEST_ASSERT_FALSE(v.hasTomorrow);
+  TEST_ASSERT_FALSE(v.hasNext);
+}
+
 void test_tomorrow_present() {
   PriceView v = viewFromFixture(kPricingJson);
   TEST_ASSERT_TRUE(v.hasTomorrow);
@@ -99,6 +140,9 @@ int main(int, char**) {
   RUN_TEST(test_today_split_and_extremes);
   RUN_TEST(test_today_average);
   RUN_TEST(test_next_hour_trend);
+  RUN_TEST(test_no_frame_for_current_hour_is_flagged_absent);
+  RUN_TEST(test_last_today_hour_falls_back_to_tomorrow);
+  RUN_TEST(test_last_today_hour_without_tomorrow_has_no_next);
   RUN_TEST(test_tomorrow_present);
   RUN_TEST(test_tomorrow_absent);
   RUN_TEST(test_dst_fall_back_second_2am_matched_by_epoch);

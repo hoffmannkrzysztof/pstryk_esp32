@@ -18,10 +18,17 @@ struct PriceView {
 
   // Page: Teraz
   // currentBuy is THE headline value every board renders (= price_gross, VAT
-  // incl.; see PriceData.h canonical contract). Renderers display this verbatim.
+  // incl.; see PriceData.h canonical contract). Renderers display this verbatim --
+  // but ONLY when hasCurrent. hasData means "some frames were parsed"; it does not
+  // mean one of them covers the current hour, and a gap there used to render the
+  // default 0.00 as an authoritative "TERAZ 00:00" next to a real daily average.
+  bool  hasCurrent = false;
   float currentBuy = 0, currentSell = 0;
   int   currentHour = 0;
   bool  currentBelowAvg = true;
+  // Likewise for the next hour: at 23:00 there is no today[cur+1], and before the
+  // day-ahead auction publishes there may be no tomorrow[0] either.
+  bool  hasNext = false;
   Trend nextTrend = Trend::Flat;
   float nextBuy = 0;
   int   nextHour = 0;

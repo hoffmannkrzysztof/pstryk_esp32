@@ -3,6 +3,7 @@
 #include "core/Version.h"
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 
 namespace pstryk {
 
@@ -46,7 +47,13 @@ static void drawChart(IRenderer& r, const Palette& p, const std::vector<Bar>& ba
   maxP *= 1.1f;
   float bottom = (minP < 0.0f) ? minP * 1.1f : 0.0f;
   float span = maxP - bottom;
+  // Arduino_GFX clips to int16_t, so this cannot run away like the EPD rasteriser
+  // can -- but a non-finite span still yields (int)NaN = INT_MAX and nonsense
+  // geometry. Bail out rather than draw it. Prices are validated in the parser too.
+  if (!std::isfinite(span) || span <= 0.0f) return;
   int zeroY = y + (int)((maxP / span) * h);
+  if (zeroY < y) zeroY = y;
+  if (zeroY > y + h) zeroY = y + h;
   int n = (int)bars.size();
   int gap = 3;
   int bw = (w - (n - 1) * gap) / n; if (bw < 1) bw = 1;
@@ -66,14 +73,21 @@ static void drawChart(IRenderer& r, const Palette& p, const std::vector<Bar>& ba
 static void pageTeraz(IRenderer& r, const Palette& p, const PriceView& v) {
   char hl[6], buf[8];
   hourLabel(v.currentHour, hl);
-  char lbl[24]; std::snprintf(lbl, sizeof(lbl), "TERAZ %s-%02d:00", hl, v.currentHour + 1);
+  // hasData does not imply a frame covering this hour -- see PriceView::hasCurrent.
+  char lbl[24];
+  if (v.hasCurrent)
+    std::snprintf(lbl, sizeof(lbl), "TERAZ %s-%02d:00", hl, (v.currentHour + 1) % 24);
+  else
+    std::snprintf(lbl, sizeof(lbl), "TERAZ --:--");
   r.text(16, 34, lbl, p.muted, 1);
 
   uint16_t tag = v.currentBelowAvg ? p.green : p.red;
-  r.text(16 + r.textWidth(lbl, 1) + 14, 34,
-         v.currentBelowAvg ? "ponizej sredniej" : "powyzej sredniej", tag, 1);
+  if (v.hasCurrent)
+    r.text(16 + r.textWidth(lbl, 1) + 14, 34,
+           v.currentBelowAvg ? "ponizej sredniej" : "powyzej sredniej", tag, 1);
 
-  formatPln(v.currentBuy, buf);
+  if (v.hasCurrent) formatPln(v.currentBuy, buf);
+  else              std::strcpy(buf, "--,--");
   r.text(16, 56, buf, p.text, 8);                 // big price ~48x64 chars
   int after = 16 + r.textWidth(buf, 8) + 12;
   r.text(after, 64, "zl/kWh", p.muted, 2);
@@ -84,13 +98,16 @@ static void pageTeraz(IRenderer& r, const Palette& p, const PriceView& v) {
   // right column
   int rx = 430;
   r.drawLine(rx - 16, 44, rx - 16, 168, p.line);
-  formatPln(v.currentSell, buf);
+  if (v.hasCurrent) formatPln(v.currentSell, buf);
+  else              std::strcpy(buf, "--,--");
   r.text(rx, 44, "SPRZEDAZ (PV)", p.muted, 1);  r.text(rx, 56, buf, p.text, 3);
   formatPln(v.todayAvg, buf);
   r.text(rx, 92, "SREDNIA DZIS", p.muted, 1);   r.text(rx, 104, buf, p.text, 3);
   char nh[6]; hourLabel(v.nextHour, nh);
-  char nl[18]; std::snprintf(nl, sizeof(nl), "NASTEPNA %s", nh);
-  formatPln(v.nextBuy, buf);
+  char nl[18];
+  std::snprintf(nl, sizeof(nl), "NASTEPNA %s", v.hasNext ? nh : "--:--");
+  if (v.hasNext) formatPln(v.nextBuy, buf);
+  else           std::strcpy(buf, "--,--");
   r.text(rx, 140, nl, p.muted, 1);              r.text(rx, 152, buf, tc, 3);
 }
 

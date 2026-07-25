@@ -64,3 +64,15 @@ static const char* kPricingNegativeJson = R"JSON(
   {"start":"2026-06-02T11:00:00Z","end":"2026-06-02T12:00:00Z","metrics":{"pricing":{"price_gross":0.05,"price_prosumer_gross":0.01,"is_cheap":false,"is_expensive":false}}}
 ],"summary":{}}
 )JSON";
+
+// Exponent overflow: ArduinoJson reports no deserialization error for 1e400, and
+// as<float>() is a bare static_cast, so this reaches the view as +inf. In the EPD
+// rasteriser that becomes span=inf -> price/span=NaN -> (int)NaN, which saturates
+// to INT_MAX on Xtensa and turns one bar into a ~INT_MAX-iteration fill loop. The
+// parser must drop the frame; the second frame proves parsing continues past it.
+static const char* kPricingInfiniteJson = R"JSON(
+{"frames":[
+  {"start":"2026-06-02T06:00:00Z","end":"2026-06-02T07:00:00Z","metrics":{"pricing":{"price_gross":1e400,"price_prosumer_gross":0.10,"is_cheap":false,"is_expensive":false}}},
+  {"start":"2026-06-02T07:00:00Z","end":"2026-06-02T08:00:00Z","metrics":{"pricing":{"price_gross":0.52,"price_prosumer_gross":0.31,"is_cheap":false,"is_expensive":false}}}
+],"summary":{}}
+)JSON";
