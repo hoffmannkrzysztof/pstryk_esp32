@@ -203,8 +203,17 @@ Aby zmienić konfigurację później:
 - **e-paper:** przytrzymaj **przycisk użytkownika (GPIO 21) ≥ 3 s** przy starcie/wybudzeniu.
 
 Przy rekonfiguracji pole klucza API jest **celowo puste** (formularz nie zdradza
-zapisanego klucza) — pozostaw je puste, aby zachować dotychczasowy klucz. Portal
-zamyka się sam po ~10 minutach bezczynności i urządzenie wraca do normalnej pracy.
+zapisanego klucza) — pozostaw je puste, aby zachować dotychczasowy klucz. Przy
+**pierwszej** konfiguracji klucz jest **wymagany** (pole jest wtedy tak opisane):
+bez niego urządzenie nie ma czego pobierać, a zapisana „połowa" konfiguracji nie
+liczy się jako gotowa.
+
+Portal zamyka się sam po ~10 minutach bezczynności. Jeśli konfiguracja jest wtedy
+kompletna, e-paper wraca do normalnej pracy po ~2 s. Jeśli nie (portal porzucony
+albo brak klucza), pokazuje `Konfiguracja niepelna` i **zasypia na 6 h** zamiast
+otwierać portal od nowa — SoftAP pobiera ~100 mA i pętla „portal → 2 s snu →
+portal" rozładowywała ogniwo w kilkanaście godzin. Przytrzymanie przycisku otwiera
+portal natychmiast, więc nie trzeba czekać.
 
 ---
 
@@ -214,13 +223,22 @@ Po wgraniu pierwszej wersji przez USB urządzenia same pobierają kolejne
 aktualizacje z GitHub Releases — cicho, w tle, z weryfikacją podpisu i
 automatycznym wycofaniem (rollback) wadliwego obrazu.
 
-- **Płyta e-paper (T5):** sprawdza aktualizacje maksymalnie raz na dobę, przy
-  okazji udanego cyklu z siecią; przy niskim stanie baterii kontrola i pobieranie
-  są wstrzymane do naładowania.
+- **Płyta e-paper (T5):** sprawdza aktualizacje maksymalnie raz na dobę, na każdym
+  cyklu z działającą siecią — **niezależnie od tego, czy pobranie cen się udało**.
+  Wcześniej kontrola siedziała w gałęzi udanego pobrania, więc urządzenia, na
+  których pobieranie zawodziło, nie dawały się naprawić zdalnie. Przy niskim stanie
+  baterii kontrola i pobieranie są wstrzymane do naładowania.
 - **Płyta LCD (T-Display-Long):** sprawdza raz na dobę (pierwsza kontrola ~6 h
   po starcie).
+- Nieudana kontrola nie zjada całej doby — kolejna próba idzie po ~4 h.
 - Kontrola manifestu jest warunkowa (ETag/304) — gdy nie ma nowego wydania,
-  nic nie jest pobierane.
+  nic nie jest pobierane. ETag zapamiętywany jest **tylko** wtedy, gdy nie ma nic
+  do instalowania; nieudana instalacja go czyści, żeby to samo wydanie zostało
+  ponowione, a nie pominięte.
+- Adres pliku `.bin` musi **dokładnie** odpowiadać temu, co wynika z pól manifestu
+  (`…/releases/download/v<wersja>/firmware-<board>.bin`). Podpis potwierdza tylko
+  bajty obrazu, więc bez tego powiązania podrobiony manifest mógłby wskazać
+  prawidłowo podpisane **starsze** wydanie i wymusić downgrade.
 - Wersja firmware jest widoczna w rogu ekranu (`vX.Y.Z`); `v0.0.0-dev` oznacza
   lokalny build, który **nie** aktualizuje się sam.
 
@@ -252,6 +270,10 @@ aktualizacje pójdą już przez OTA. Płyta e-paper nie wymaga tego kroku.
 ### Wydawanie nowej wersji (dla maintainera)
 
 1. Otaguj commit sem-ver tagiem, np. `git tag v1.4.0 && git push origin v1.4.0`.
+   Tag musi być **dokładnie** `vMAJOR.MINOR.PATCH`, bez sufiksu — CI odrzuca inne.
+   `v1.4.0-rc1` sprawiłby, że późniejsze `v1.4.0` nie wygląda na nowsze, a tag
+   zawierający `-dev` trwale wyłączałby samoaktualizację na urządzeniach, które go
+   zainstalują (jedynym wyjściem byłby wtedy reflash przez USB).
 2. CI (`.github/workflows/release.yml`) zbuduje obie płyty, podpisze binaria
    kluczem prywatnym z sekretu `OTA_SIGNING_KEY` i opublikuje release z plikami
    `firmware-<board>.bin` oraz `manifest-<board>.json`.
@@ -269,9 +291,11 @@ aktualizacji; wyciek = ktoś może podpisać firmware, które urządzenia zaakce
 
 ## Strategia odświeżania (bezpieczna dla limitu API)
 
-Jedno zapytanie na odświeżenie pobiera okno **dziś 00:00 → +48 h** (od razu łapie
-„jutro", gdy tylko zostanie opublikowane). Limit 3 zapytania/godzinę nigdy nie jest
-przekraczany:
+Jedno zapytanie na odświeżenie pobiera okno **od dzisiejszej lokalnej 00:00 do
+lokalnej 00:00 za dwa dni** (od razu łapie „jutro", gdy tylko zostanie
+opublikowane). Koniec okna liczony jest kalendarzowo, nie jako `+48 h`: w dobie
+zmiany czasu doba ma 23 lub 25 h, a płaskie 48 h ucinało wtedy ostatnią godzinę
+„jutra". Limit 3 zapytania/godzinę nigdy nie jest przekraczany:
 
 - **LCD (always-on):** co **30 min**; w trybie „oczekiwania na jutro" (od 12:00,
   dopóki nie ma jutra) co **20 min** (= dokładnie 3/h). Nagłówek „TERAZ"
@@ -285,8 +309,12 @@ przekraczany:
   wciśnięto przycisk („odśwież teraz") albo zbliża się zmiana czasu.
 - Przy awarii sieci odstępy prób rosną wykładniczo (60 s → 1 h), a ekran błędu
   pojawia się dopiero po 3 kolejnych porażkach — krótka przerwa w sieci nie
-  kasuje ostatniego poprawnego ekranu.
-- Zawsze respektowany jest nagłówek `429 Retry-After`.
+  kasuje ostatniego poprawnego ekranu. Ta sama zasada obowiązuje teraz dla `429`
+  oraz dla braku zegara (nieustawiony RTC / zablokowany NTP), które wcześniej
+  odpowiednio kasowały ekran przy pierwszym wystąpieniu i ponawiały płaskie 120 s.
+- Nagłówek `429 Retry-After` jest respektowany, ale **przycięty do 60–3600 s** —
+  wartość poza tym zakresem jest ignorowana na rzecz domyślnej. Wcześniej szła
+  wprost do budzika, więc `Retry-After: 86400` zatrzymywał odświeżanie na dobę.
 
 ---
 
