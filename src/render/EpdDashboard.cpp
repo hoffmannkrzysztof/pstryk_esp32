@@ -1,6 +1,8 @@
 #include "render/EpdDashboard.h"
 #include "core/Format.h"       // formatPln(float, char[8])
 #include "core/Version.h"
+#include "core/SetupQr.h"      // buildWifiQrPayload
+#include "qrcode.h"            // ricmoo/QRCode (naglowek sam robi extern "C")
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -108,6 +110,17 @@ void extremesLine(IRenderer& r, const Pal& p, const Bar& lo, const Bar& hi, int 
   std::snprintf(s, sizeof(s), "v %02d:00 %s    ^ %02d:00 %s",
                 lo.hour, pl, hi.hour, ph);
   r.text(x, y, s, p.ink, 1);
+}
+
+// Obrys baterii + nub + wypelnienie proporcjonalne do pct; pct < 0 (nieznany)
+// zostawia pusta ikone -- spojnie z EpdStatus::batteryPct == -1.
+void drawBatteryIcon(IRenderer& r, const Pal& p, int x, int y, int w, int h, int pct) {
+  r.drawRect(x, y, w, h, p.ink);
+  r.fillRect(x + w, y + h / 2 - h / 6, 4, h / 3, p.ink);   // styk
+  if (pct >= 0) {
+    int inner = (w - 6) * pct / 100;
+    if (inner > 0) r.fillRect(x + 3, y + 3, inner, h - 6, p.ink);
+  }
 }
 
 }  // namespace
@@ -219,6 +232,69 @@ void drawMessage(IRenderer& r, const char* line1, const char* line2) {
   r.text((r.width() - r.textWidth(line1, 2)) / 2, y, line1, p.ink, 2);
   if (line2 && line2[0])
     r.text((r.width() - r.textWidth(line2, 1)) / 2, y + lh + 12, line2, p.ink, 1);
+  r.text(20, r.height() - 24, "v" FIRMWARE_VERSION, r.rgb(120, 120, 120), 1);
+  r.present();
+}
+
+// Ekran konfiguracji portalu. Wspolrzedne stref: spec
+// docs/superpowers/specs/2026-08-24-epaper-setup-screen-design.md, makieta
+// docs/mockups/epaper-setup.html (ta sama mapa liczb).
+void drawSetupScreen(IRenderer& r, const SetupInfo& info) {
+  Pal p(r);
+  r.clear(p.bg);
+  const int W = r.width();
+  const int M = 24;
+
+  // --- naglowek: tytul + badge baterii ---
+  r.text(M, 10, "Pstryk - Konfiguracja", p.ink, 1);
+  char bat[16];
+  if (info.batteryPct >= 0)
+    std::snprintf(bat, sizeof(bat), "BAT %d %%", info.batteryPct);
+  else
+    std::strcpy(bat, "BAT ?");
+  int batX = W - M - r.textWidth(bat, 1);
+  r.text(batX, 10, bat, p.ink, 1);
+  drawBatteryIcon(r, p, batX - 40 - 12, 16, 36, 18, info.batteryPct);
+  r.drawLine(M, 52, W - M, 52, p.mid);
+
+  // --- lewa kolumna: kroki ---
+  r.text(M, 64, "1. Polacz telefon z siecia:", p.ink, 1);
+  r.text(48, 100, info.ssid, p.ink, 2);
+  r.text(M, 160, "2. Wpisz haslo:", p.ink, 1);
+  // 8 cyfr przy h=80 -> w=46, t=10, gap=12 -> 452 px; ramka z paddingiem 24/18.
+  r.drawRect(48, 196, 500, 116, p.ink);
+  drawBigPrice(r, p, 72, 214, 80, info.password);
+  char step3[48];
+  std::snprintf(step3, sizeof(step3), "3. Otworz w przegladarce: %s", info.portalUrl);
+  r.text(M, 336, step3, p.ink, 1);
+
+  // --- prawa kolumna: QR do sieci (v3 = 29 modulow po 8 px = 232 px) ---
+  // Bez ramki dookola: biale tlo panelu JEST quiet zone (>= 32 px z kazdej
+  // strony), a jakikolwiek tusz w poblizu zjada margines skanowania.
+  char payload[64];
+  if (buildWifiQrPayload(info.ssid, info.password, payload, sizeof(payload))) {
+    QRCode qr;
+    uint8_t qrData[106];   // qrcode_getBufferSize(3) = ((29*29)+7)/8
+    if (qrcode_initText(&qr, qrData, 3, ECC_MEDIUM, payload) >= 0) {
+      const int mod = 8, qx = 660, qy = 90, qpx = 29 * mod;
+      for (uint8_t my = 0; my < qr.size; ++my)
+        for (uint8_t mx = 0; mx < qr.size; ++mx)
+          if (qrcode_getModule(&qr, mx, my))
+            r.fillRect(qx + mx * mod, qy + my * mod, mod, mod, p.ink);
+      const char* cap = "Zeskanuj telefonem";
+      r.text(qx + (qpx - r.textWidth(cap, 1)) / 2, qy + qpx + 38, cap, p.ink, 1);
+    }
+  }
+  // Kazde niepowodzenie QR (payload sie nie miesci / init < 0) zostawia strefe
+  // QR pusta -- cyfry wyzej sa sciezka nadrzedna, a lewa kolumna i tak miesci
+  // sie w pelnej szerokosci, wiec zaden reflow nie jest potrzebny.
+
+  // --- prosba o ladowarke ---
+  r.drawLine(M, 400, W - M, 400, p.mid);
+  drawBatteryIcon(r, p, M, 426, 44, 24, info.batteryPct);
+  r.text(84, 416, "Podlacz mnie do ladowarki", p.ink, 2);
+  r.text(84, 468, "Rozdaje tu Wi-Fi i szybko sie rozladowuje.", p.ink, 1);
+
   r.text(20, r.height() - 24, "v" FIRMWARE_VERSION, r.rgb(120, 120, 120), 1);
   r.present();
 }
