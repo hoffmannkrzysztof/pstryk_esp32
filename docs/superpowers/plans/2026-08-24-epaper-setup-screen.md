@@ -468,7 +468,9 @@ void drawSetupScreen(IRenderer& r, const SetupInfo& info) {
   // --- prawa kolumna: QR do sieci (v3 = 29 modulow po 8 px = 232 px) ---
   // Bez ramki dookola: biale tlo panelu JEST quiet zone (>= 32 px z kazdej
   // strony), a jakikolwiek tusz w poblizu zjada margines skanowania.
-  char payload[64];
+  char payload[64];   // UWAGA (post-review fe8de14): w kodzie jest payload[43] --
+                      // 42 B pojemnosci v3-M + NUL; qrcode_initText w 0.0.1 nie
+                      // odmawia za dlugich danych (bb_appendBits bez bounds-checku).
   if (buildWifiQrPayload(info.ssid, info.password, payload, sizeof(payload))) {
     QRCode qr;
     uint8_t qrData[106];   // qrcode_getBufferSize(3) = ((29*29)+7)/8

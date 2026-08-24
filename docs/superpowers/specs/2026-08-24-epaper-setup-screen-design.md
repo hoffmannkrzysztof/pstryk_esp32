@@ -100,8 +100,8 @@ aparat iOS i Androida):
 WIFI:T:WPA;S:Pstryk-Setup;P:41850372;;
 ```
 
-39 bajtów. Wersja 3 z korekcją M mieści 42 bajty w trybie bajtowym → mieści się
-z zapasem 3 bajtów.
+38 bajtów. Wersja 3 z korekcją M mieści 42 bajty w trybie bajtowym → mieści się
+z zapasem 4 bajtów.
 
 **Escapowanie jest świadomie pominięte.** Specyfikacja `WIFI:` wymaga
 poprzedzenia `\` dla `\ ; , : "`. SSID to stała `"Pstryk-Setup"` (myślnik nie
@@ -116,8 +116,11 @@ testem natywnym). `qrcode_initText()` w przypiętej wersji 0.0.1 **nie potrafi**
 odrzucić zbyt długich danych: `encodeDataCodewords()` (`qrcode.c:629-690`) zwraca
 wyłącznie tryb 0/1/2, więc `if (mode < 0) { return -1; }` (`qrcode.c:800`) jest
 nieosiągalne — upstream sam to przyznaje komentarzem `// @TODO: Return error if
-data is too big.` (`qrcode.c:774`). Warunek `>= 0` w `drawSetupScreen()` zostaje
-w kodzie jako pas i szelki, nie jako mechanizm ochrony. Przy każdym niepowodzeniu
+data is too big.` (`qrcode.c:774`). Co gorsza, `bb_appendBits()` (`qrcode.c:209`)
+pisze bez bounds-checku do 70-bajtowego bufora na stosie — payload > 42 B to nie
+tylko niedekodowalny QR, ale przepełnienie stosu. Warunek `>= 0` w
+`drawSetupScreen()` zostaje w kodzie jako pas i szelki, nie jako mechanizm
+ochrony. Przy każdym niepowodzeniu
 (bufor za mały) ekran rysuje się **bez** kolumny QR, a lewa kolumna rozciąga się
 na pełną szerokość. Brak QR nie może wywrócić konfiguracji — cyfry hasła są
 nadrzędną ścieżką, QR jest tylko udogodnieniem.
