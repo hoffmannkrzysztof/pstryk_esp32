@@ -265,6 +265,23 @@ static void msgScreen(EpdRenderer& g, const char* line1, const char* line2) {
   drawMessage(g, line1, line2);
 }
 
+// Ten sam rytual zatrzaskow co msgScreen (to tez pelnoekranowe przemalowanie).
+// requestDeepClean ma tu drugi powod poza spojnoscia: pozostalosci po
+// poprzednim obrazie obnizaja kontrast modulow QR, a QR ma najmniejszy
+// margines bledu ze wszystkiego, co rysujemy.
+static void setupScreen(EpdRenderer& g, int batteryPct) {
+  g_lastDrawSig = 0;
+  g_authShown = 0;
+  g_lastDeepCleanDay = 0;
+  g.requestDeepClean();
+  SetupInfo si;
+  si.ssid = WiFiProvisioner::portalSsid();
+  si.password = WiFiProvisioner::portalPassword();
+  si.portalUrl = "192.168.4.1";
+  si.batteryPct = batteryPct;
+  drawSetupScreen(g, si);
+}
+
 #ifdef PSTRYK_OTA_BOOTSTRAP
 // Installer image: provision Wi-Fi (+ API key, saved to NVS for the real firmware),
 // then force-install the latest signed release for this board and reboot into it.
@@ -274,10 +291,13 @@ void SleepCycle::runBootstrap() {
   settings_.load();
   bool needPortal = !settings_.isComplete();
   if (needPortal) {
-    char pskLine[40];
-    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
-                  WiFiProvisioner::portalPassword());
-    msgScreen(gfx_, "Konfiguracja", pskLine);
+    // Obraz instalatora nigdy nie czytal ogniwa -- ekran konfiguracji pokazuje
+    // badge baterii, wiec odczyt musi byc TUTAJ: przed portalem (ADC2 vs Wi-Fi),
+    // inaczej ekran zawsze pokazywalby "BAT ?".
+    bool batLow = false;
+    float batVolts = 0.0f;
+    int batPct = readBatteryPercent(batLow, batVolts);
+    setupScreen(gfx_, batPct);
   } else {
     msgScreen(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
   }
@@ -343,10 +363,7 @@ void SleepCycle::setup() {
 
   // 3) reconfigure: button held at boot, or no usable saved config
   if (wantsPortal) {
-    char pskLine[40];
-    std::snprintf(pskLine, sizeof(pskLine), "Pstryk-Setup  haslo: %s",
-                  WiFiProvisioner::portalPassword());
-    msgScreen(gfx_, "Konfiguracja", pskLine);
+    setupScreen(gfx_, batPct);   // batPct z odczytu w kroku 1 (przed Wi-Fi)
     WiFiProvisioner prov;
     prov.ensureConnected(settings_, /*forcePortal=*/true);
     // Gate on the CONFIG, not on the connection. A portal that timed out (or was
