@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Pstryk — ekran konfiguracji e-paper (makieta)</title>
+<style>
+  /* Rendered at 2x for crisp screenshots. Coordinates are in the panel's native
+     960x540 pixel space, matching drawSetupScreen() in src/render/EpdDashboard.cpp. */
+  html, body { margin: 0; padding: 0; background: #d8dade; }
+  body { zoom: 2; }
+  .frame { padding: 24px; }
+  .screen { position: relative; width: 960px; height: 540px; background: #ffffff;
+            font-family: "Fira Sans", -apple-system, "Segoe UI", Helvetica, sans-serif;
+            box-shadow: 0 4px 18px #0006; overflow: hidden; }
+  .t { position: absolute; white-space: nowrap; color: #000; line-height: 1; }
+  .seg { position: absolute; background: #000; }
+  .box { position: absolute; box-sizing: border-box; border: 2px solid #000; }
+  .ln { position: absolute; background: #969696; height: 1px; }
+  .qrm { position: absolute; background: #000; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="screen" id="epd"></div>
+</div>
+<script>
+const C = { ink:'#000', mid:'#969696' };
+const W = 960, M = 24;
+const FB = 21, FH = 32;                 // body/head font px (same as epaper.html)
+
+const SSID = 'Pstryk-Setup';
+const PSK  = '41850372';
+const URL  = '192.168.4.1';
+const BAT  = 62;                        // ustaw -1 zeby zobaczyc wariant "BAT ?"
+
+const scr = document.getElementById('epd');
+function el(cls){ const d=document.createElement('div'); d.className=cls; scr.appendChild(d); return d; }
+function text(x,y,s,size,color){
+  const t=el('t'); t.textContent=s; t.style.left=x+'px'; t.style.top=y+'px';
+  t.style.fontSize=(size>=2?FH:FB)+'px'; t.style.color=color||C.ink;
+  if(size>=2) t.style.fontWeight='600';
+  return t;
+}
+function textW(s,size){ const t=text(-9999,-9999,s,size); const w=t.getBoundingClientRect().width/2; t.remove(); return w; }
+function rect(x,y,w,h,fill){ const d=el(fill?'seg':'box'); d.style.left=x+'px'; d.style.top=y+'px';
+  d.style.width=w+'px'; d.style.height=h+'px'; return d; }
+function hline(x,y,w){ const d=el('ln'); d.style.left=x+'px'; d.style.top=y+'px'; d.style.width=w+'px'; }
+
+// 7-seg jak drawDigit() w EpdDashboard.cpp: h=80 -> w=46, t=10, gap=12.
+const SEG=[0x3F,0x06,0x5B,0x4F,0x66,0x6D,0x7D,0x07,0x7F,0x6F];
+function segDigit(x,y,w,h,t,m){
+  if(m&0x01) rect(x,y,w,t,1);
+  if(m&0x02) rect(x+w-t,y,t,h/2,1);
+  if(m&0x04) rect(x+w-t,y+h/2,t,h/2,1);
+  if(m&0x08) rect(x,y+h-t,w,t,1);
+  if(m&0x10) rect(x,y+h/2,t,h/2,1);
+  if(m&0x20) rect(x,y,t,h/2,1);
+  if(m&0x40) rect(x,y+(h-t)/2,w,t,1);
+}
+function bigDigits(x,y,h,s){
+  const w=Math.floor(h*0.58), t=Math.floor(h*0.13), gap=Math.floor(h*0.16);
+  let cx=x;
+  for(const ch of s){ segDigit(cx,y,w,h,t,SEG[+ch]); cx+=w+gap; }
+}
+// Ikona baterii: obrys + nub + wypelnienie proporcjonalne (pct<0 = pusta).
+function batteryIcon(x,y,w,h,pct){
+  rect(x,y,w,h,0);
+  rect(x+w, y+h/2-h/6, 4, h/3, 1);
+  if(pct>=0){ const inner=Math.floor((w-6)*pct/100); if(inner>0) rect(x+3,y+3,inner,h-6,1); }
+}
+// Placeholder QR: finder patterns + deterministyczny szum (LCG), 29x29 po 8 px.
+function qrPlaceholder(qx,qy,mod){
+  const N=29; let seed=12345;
+  const rnd=()=>((seed=(seed*1103515245+12345)&0x7fffffff)/0x7fffffff);
+  const finder=(fx,fy)=>{ for(let j=0;j<7;j++)for(let i=0;i<7;i++){
+    const ring=(i==0||i==6||j==0||j==6), core=(i>=2&&i<=4&&j>=2&&j<=4);
+    if(ring||core) rect(qx+(fx+i)*mod, qy+(fy+j)*mod, mod, mod, 1).className='qrm';
+  }};
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++){
+    const inF=(i<9&&j<9)||(i>=N-9&&j<9)||(i<9&&j>=N-9);
+    if(!inF && rnd()<0.45) rect(qx+i*mod, qy+j*mod, mod, mod, 1).className='qrm';
+  }
+  finder(0,0); finder(N-7,0); finder(0,N-7);
+}
+
+// --- header ---
+text(M, 10, 'Pstryk - Konfiguracja', 1);
+const bat = BAT>=0 ? `BAT ${BAT} %` : 'BAT ?';
+const batW = textW(bat,1), batX = W-M-batW;
+text(batX, 10, bat, 1);
+batteryIcon(batX-40-12, 16, 36, 18, BAT);
+hline(M, 52, W-2*M);
+
+// --- lewa kolumna ---
+text(M, 64, '1. Polacz telefon z siecia:', 1);
+text(48, 100, SSID, 2);
+text(M, 160, '2. Wpisz haslo:', 1);
+rect(48, 196, 500, 116, 0);
+bigDigits(72, 214, 80, PSK);
+text(M, 336, `3. Otworz w przegladarce: ${URL}`, 1);
+
+// --- QR ---
+qrPlaceholder(660, 90, 8);
+const cap='Zeskanuj telefonem', cw=textW(cap,1);
+text(660+(232-cw)/2, 360, cap, 1);
+
+// --- ladowarka ---
+hline(M, 400, W-2*M);
+batteryIcon(M, 426, 44, 24, BAT);
+text(84, 416, 'Podlacz mnie do ladowarki', 2);
+text(84, 468, 'Rozdaje tu Wi-Fi i szybko sie rozladowuje.', 1);
+
+text(20, 516, 'v1.4.0', 1, '#787878');
+</script>
+</body>
+</html>
