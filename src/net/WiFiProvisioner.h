@@ -25,6 +25,11 @@ class WiFiProvisioner {
   // portal -- an OPEN portal would hand the Wi-Fi credential form (and any
   // typed API key) to anyone in radio range.
   static const char* portalPassword();
+
+  // SSID rozglaszany przez portal. Jedno zrodlo prawdy dla startConfigPortal,
+  // ekranu konfiguracji i kodu QR -- QR z innym SSID niz rozglaszany bylby
+  // zepsuty w sposob niewidoczny na ekranie.
+  static const char* portalSsid();
 };
 
 }  // namespace pstryk

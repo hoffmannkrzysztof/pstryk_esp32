@@ -28,6 +28,10 @@ static void rememberAp() {
 
 void WiFiProvisioner::forgetAp() { g_apChannel = 0; }
 
+// Bez znakow specjalnych formatu WIFI: (\ ; , : ") -- buildWifiQrPayload w
+// core/SetupQr swiadomie nie escapuje, wychodzac z tego zalozenia.
+const char* WiFiProvisioner::portalSsid() { return "Pstryk-Setup"; }
+
 const char* WiFiProvisioner::portalPassword() {
   // Random per boot (NOT MAC-derived: the SoftAP BSSID visible in beacons is
   // built from the same base MAC, so a MAC-derived PSK would be computable by
@@ -92,7 +96,7 @@ bool WiFiProvisioner::ensureConnected(Settings& s, bool forcePortal) {
                                    "", 80);
   wm.addParameter(&apiKeyParam);
 
-  bool ok = wm.startConfigPortal("Pstryk-Setup", portalPassword());
+  bool ok = wm.startConfigPortal(portalSsid(), portalPassword());
   if (ok) {
     // Capture whatever WiFiManager negotiated/entered.
     s.ssid = WiFi.SSID();
