@@ -250,7 +250,7 @@ static uint32_t viewSignature(const PriceView& v, const EpdStatus& st) {
 //
 // They also clear the "already told the user" latch. g_authShown was reset only by
 // a SUCCESSFUL fetch, so any other screen painted over the API-key hint (no Wi-Fi,
-// rate limit, flat battery, reconfigure) left the panel accusing the router while
+// rate limit, flat battery, reconfigure via setupScreen) left the panel accusing the router while
 // the actual fault was the key -- at zero power, indefinitely.
 //
 // And they re-arm the daily deghost: a message screen can stay latched for hours
