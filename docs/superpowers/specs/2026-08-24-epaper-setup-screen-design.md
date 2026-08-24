@@ -109,12 +109,18 @@ jest znakiem specjalnym), a PSK to wyłącznie cyfry — żaden znak wymagający
 escapowania nie może tam wystąpić. Kod escapujący byłby martwy i nietestowalny.
 Zamiast niego: test jednostkowy pilnujący dokładnego formatu payloadu.
 
-**Zachowanie awaryjne:** `qrcode_initText()` zwraca `-1`, gdy payload nie mieści
-się w żądanej wersji (upstream `qrcode.c`: `if (mode < 0) { return -1; }`) — więc
-ta gałąź jest realnie osiągalna, np. gdyby ktoś wydłużył SSID. Przy błędzie ekran
-rysuje się **bez** kolumny QR, a lewa kolumna rozciąga się na pełną szerokość.
-Brak QR nie może wywrócić konfiguracji — cyfry hasła są nadrzędną ścieżką, QR
-jest tylko udogodnieniem.
+**Zachowanie awaryjne:** realnym strażnikiem pojemności jest bufor `payload[43]`
+(42 B = dokładna pojemność QR v3-M w trybie bajtowym + NUL) razem z kontraktem
+`buildWifiQrPayload()` — `false` i pusty string, gdy się nie mieści (pilnowane
+testem natywnym). `qrcode_initText()` w przypiętej wersji 0.0.1 **nie potrafi**
+odrzucić zbyt długich danych: `encodeDataCodewords()` (`qrcode.c:629-690`) zwraca
+wyłącznie tryb 0/1/2, więc `if (mode < 0) { return -1; }` (`qrcode.c:800`) jest
+nieosiągalne — upstream sam to przyznaje komentarzem `// @TODO: Return error if
+data is too big.` (`qrcode.c:774`). Warunek `>= 0` w `drawSetupScreen()` zostaje
+w kodzie jako pas i szelki, nie jako mechanizm ochrony. Przy każdym niepowodzeniu
+(bufor za mały) ekran rysuje się **bez** kolumny QR, a lewa kolumna rozciąga się
+na pełną szerokość. Brak QR nie może wywrócić konfiguracji — cyfry hasła są
+nadrzędną ścieżką, QR jest tylko udogodnieniem.
 
 Moduły malowane są jako `fillRect(x0 + mx*8, y0 + my*8, 8, 8, ink)` — `IRenderer`
 nie ma rysowania pikseli, a `fillRect` mapuje się na `epd_fill_rect`.

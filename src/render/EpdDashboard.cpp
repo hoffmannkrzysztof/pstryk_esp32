@@ -271,7 +271,10 @@ void drawSetupScreen(IRenderer& r, const SetupInfo& info) {
   // --- prawa kolumna: QR do sieci (v3 = 29 modulow po 8 px = 232 px) ---
   // Bez ramki dookola: biale tlo panelu JEST quiet zone (>= 32 px z kazdej
   // strony), a jakikolwiek tusz w poblizu zjada margines skanowania.
-  char payload[64];
+  char payload[43];  // 42 = dokladna pojemnosc QR v3-M w trybie bajtowym + NUL;
+                     // buildWifiQrPayload zwraca false gdy sie nie miesci, wiec
+                     // ten rozmiar bufora JEST straznikiem pojemnosci (w QRCode
+                     // 0.0.1 qrcode_initText nie umie odmowic za dlugich danych).
   if (buildWifiQrPayload(info.ssid, info.password, payload, sizeof(payload))) {
     QRCode qr;
     uint8_t qrData[106];   // qrcode_getBufferSize(3) = ((29*29)+7)/8
@@ -285,9 +288,10 @@ void drawSetupScreen(IRenderer& r, const SetupInfo& info) {
       r.text(qx + (qpx - r.textWidth(cap, 1)) / 2, qy + qpx + 38, cap, p.ink, 1);
     }
   }
-  // Kazde niepowodzenie QR (payload sie nie miesci / init < 0) zostawia strefe
-  // QR pusta -- cyfry wyzej sa sciezka nadrzedna, a lewa kolumna i tak miesci
-  // sie w pelnej szerokosci, wiec zaden reflow nie jest potrzebny.
+  // Niepowodzenie QR zostawia strefe pusta -- cyfry wyzej sa sciezka nadrzedna.
+  // Straznikiem jest rozmiar bufora payload (42 B pojemnosci v3-M), nie
+  // qrcode_initText: w wersji 0.0.1 przepelnienie nie zwraca bledu, tylko
+  // koduje niedekodowalny QR. Warunek >= 0 zostaje jako pas i szelki.
 
   // --- prosba o ladowarke ---
   r.drawLine(M, 400, W - M, 400, p.mid);
