@@ -303,4 +303,103 @@ void drawSetupScreen(IRenderer& r, const SetupInfo& info) {
   r.present();
 }
 
+// Ekran powitalny / niedokonczonej konfiguracji. E-papier trzyma obraz bez
+// zasilania, wiec to, co ten ekran namaluje po fabrycznym pierwszym rozruchu,
+// jedzie w pudelku do klienta -- wizytowka produktu, nie komunikat bledu.
+// Wspolrzedne stref: spec docs/superpowers/specs/2026-08-25-epaper-welcome-
+// screen-design.md, makieta docs/mockups/epaper-welcome.html (ta sama mapa
+// liczb). Pozycje prawostronne i rzad checkboxow licza sie z textWidth() w
+// runtime -- staly x tylko tam, gdzie tekst zaczyna sie od lewej.
+void drawWelcomeScreen(IRenderer& r, int batteryPct) {
+  Pal p(r);
+  r.clear(p.bg);
+  const int W = r.width();
+  const int M = 24;
+
+  // --- naglowek: etykieta stanu + badge baterii (uklad 1:1 z drawSetupScreen) ---
+  r.text(M, 10, "Pstryk - Pierwsze uruchomienie", p.ink, 1);
+  char bat[16];
+  if (batteryPct >= 0)
+    std::snprintf(bat, sizeof(bat), "BAT %d %%", batteryPct);
+  else
+    std::strcpy(bat, "BAT ?");
+  int batX = W - M - r.textWidth(bat, 1);
+  r.text(batX, 10, bat, p.ink, 1);
+  drawBatteryIcon(r, p, batX - 40 - 12, 16, 36, 18, batteryPct);
+  r.drawLine(M, 52, W - M, 52, p.mid);
+
+  // --- plakietka marki: cien, czarna plyta, bialy piorun ---
+  // Sylwetka jak w symbolu wysokiego napiecia: dwie rownolegle przekatne
+  // kreski (plastry 8 px schodzace o 6 px w lewo, ~37 stopni), zlamane w
+  // polowie polka wystajaca w prawo. Plastry musza byc cienkie: grubsze rzedy
+  // zabkuja OBIE krawedzie i polka ginie w tym szumie (sprawdzone na makiecie).
+  r.fillRoundRect(82, 124, 280, 280, 56, p.light);
+  r.fillRoundRect(70, 112, 280, 280, 56, p.ink);
+  for (int i = 0; i < 12; ++i) r.fillRect(234 - 6 * i, 156 + 8 * i, 52, 9, p.bg);
+  r.fillRect(142, 252, 114, 32, p.bg);   // polka: jedyny element lamiacy rytm
+  for (int i = 0; i < 8; ++i)  r.fillRect(196 - 6 * i, 284 + 8 * i, 44, 9, p.bg);
+
+  // --- prawa kolumna: powitanie i obietnica z mini-wykresem ---
+  const int cx = 420;
+  r.text(cx, 96, "Czesc, jestem Pstryk.", p.ink, 2);
+  r.text(cx, 157, "Pokaze Ci, kiedy prad jest tani,", p.ink, 1);
+  r.text(cx, 187, "a kiedy lepiej poczekac.", p.ink, 1);
+  // 5 slupkow bez liczb i legendy; ciemniejsze = drozsze, jak w drawChart.
+  r.fillRect(798, 202, 14, 10, p.mid);
+  r.fillRect(818, 196, 14, 16, p.mid);
+  r.fillRect(838, 188, 14, 24, p.ink);
+  r.fillRect(858, 200, 14, 12, p.mid);
+  r.fillRect(878, 192, 14, 20, p.ink);
+  r.drawLine(796, 212, 894, 212, p.mid);
+
+  // --- blok akcji: piktogram, naglowek, 7-seg "3", linia zwalniania ---
+  // Piktogram celowo abstrakcyjny (palec + okragly pierscien + iskry): pozycja
+  // fizycznego przycisku na obudowie nie jest znana, wiec zadnych strzalek.
+  // Palec PO wnetrzu -- jego dol wchodzi 10 px w biel i to jest "wcisniecie".
+  r.fillRoundRect(422, 300, 52, 52, 26, p.ink);
+  r.fillRoundRect(430, 308, 36, 36, 18, p.bg);
+  r.fillRoundRect(441, 282, 14, 36, 7, p.ink);
+  r.drawLine(424, 270, 432, 278, p.ink);
+  r.drawLine(472, 270, 464, 278, p.ink);
+  r.text(488, 252, "Przytrzymaj przycisk", p.ink, 2);
+  drawDigit(r, 488, 309, 35, 60, 8, p.ink, SEG[3]);   // rym z 7-seg haslem portalu
+  r.text(539, 333, "sekundy", p.ink, 2);
+  // E-papier nie daje zadnej reakcji przez cale 3 s trzymania -- bez tej linii
+  // czesc osob puszcza za wczesnie i uznaje, ze przycisk nie dziala.
+  r.text(cx, 386, "Trzymaj, az pokaze ustawienia.", p.dark, 1);
+
+  // --- pasek "Przygotuj": 4 checkboxy + sciezka do klucza API ---
+  // Uprzedza oba najczestsze scenariusze porazki, ZANIM portal sie otworzy:
+  // brak klucza pod reka i padnieta w polowie konfiguracji bateria.
+  r.drawLine(M, 428, W - M, 428, p.mid);
+  r.text(M, 442, "Przygotuj:", p.ink, 1);
+  int cbX = M + r.textWidth("Przygotuj:", 1) + 16;
+  static const char* const kPrep[4] = {"telefon", "haslo Wi-Fi", "klucz API", "ladowarka"};
+  for (int i = 0; i < 4; ++i) {
+    r.drawRect(cbX, 448, 18, 18, p.ink);
+    r.drawRect(cbX + 1, 449, 16, 16, p.ink);   // podwojny obrys = optyczne 2 px
+    r.text(cbX + 28, 442, kPrep[i], p.ink, 1);
+    cbX += 28 + r.textWidth(kPrep[i], 1) + 28;
+  }
+  // Ikona klucza: glowka z otworem + trzon + dwa zeby. Baza M+1, nie M:
+  // fillRoundRect sklada kolo z epd_fill_circle o srednicy 2r+1, wiec pelne
+  // kolo (2r == w) maluje 1 px w lewo od nominalnego boxu (EpdRenderer.cpp:47)
+  // -- glowka na x=M wchodzilaby w margines.
+  const int kx = M + 1;
+  r.fillRoundRect(kx, 478, 20, 20, 10, p.ink);
+  r.fillRoundRect(kx + 5, 483, 10, 10, 5, p.bg);
+  r.fillRect(kx + 18, 486, 34, 4, p.ink);
+  r.fillRect(kx + 40, 490, 4, 8, p.ink);
+  r.fillRect(kx + 48, 490, 4, 8, p.ink);
+  r.text(88, 474, "Klucz API: Pstryk > Konto > Urzadzenia i integracje", p.dark, 1);
+
+  // --- stopka: wersja; przy niskiej baterii cicha zapowiedz glosem portalu ---
+  r.text(20, r.height() - 24, "v" FIRMWARE_VERSION, r.rgb(120, 120, 120), 1);
+  if (batteryPct >= 0 && batteryPct < 20) {
+    const char* chg = "Podlacz mnie do ladowarki";
+    r.text(W - M - r.textWidth(chg, 1), r.height() - 24, chg, p.dark, 1);
+  }
+  r.present();
+}
+
 }  // namespace pstryk

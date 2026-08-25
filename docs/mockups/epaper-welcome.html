@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Pstryk — ekran powitalny e-paper (makieta)</title>
+<style>
+  /* Rendered at 2x for crisp screenshots. Coordinates are in the panel's native
+     960x540 pixel space, matching drawWelcomeScreen() in src/render/EpdDashboard.cpp. */
+  html, body { margin: 0; padding: 0; background: #d8dade; }
+  body { zoom: 2; }
+  .frame { padding: 24px; }
+  .screen { position: relative; width: 960px; height: 540px; background: #ffffff;
+            font-family: "Fira Sans", -apple-system, "Segoe UI", Helvetica, sans-serif;
+            box-shadow: 0 4px 18px #0006; overflow: hidden; }
+  .t { position: absolute; white-space: nowrap; color: #000; line-height: 1; }
+  .seg { position: absolute; background: #000; }
+  .box { position: absolute; box-sizing: border-box; border: 1px solid #000; }
+  .ln { position: absolute; background: #969696; height: 1px; }
+  .rr { position: absolute; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="screen" id="epd"></div>
+</div>
+<script>
+const C = { ink:'#000', bg:'#fff', dark:'#282828', mid:'#969696', light:'#cdcdcd' };
+const W = 960, M = 24;
+const FB = 21, FH = 32;                 // body/head font px (same as epaper.html)
+
+const BAT = 62;                         // ustaw -1 ("BAT ?") albo np. 12 (stopka
+                                        // dostaje "Podlacz mnie do ladowarki")
+const VER = 'v1.4.2';
+
+const scr = document.getElementById('epd');
+function el(cls){ const d=document.createElement('div'); d.className=cls; scr.appendChild(d); return d; }
+function text(x,y,s,size,color){
+  const t=el('t'); t.textContent=s; t.style.left=x+'px'; t.style.top=y+'px';
+  t.style.fontSize=(size>=2?FH:FB)+'px'; t.style.color=color||C.ink;
+  if(size>=2) t.style.fontWeight='600';
+  return t;
+}
+function textW(s,size){ const t=text(-9999,-9999,s,size); const w=t.getBoundingClientRect().width/2; t.remove(); return w; }
+function rect(x,y,w,h,fill,color){ const d=el(fill?'seg':'box'); d.style.left=x+'px'; d.style.top=y+'px';
+  d.style.width=w+'px'; d.style.height=h+'px';
+  if(color){ if(fill) d.style.background=color; else d.style.borderColor=color; } return d; }
+function hline(x,y,w){ const d=el('ln'); d.style.left=x+'px'; d.style.top=y+'px'; d.style.width=w+'px'; }
+function rrect(x,y,w,h,r,color){ const d=el('rr'); d.style.left=x+'px'; d.style.top=y+'px';
+  d.style.width=w+'px'; d.style.height=h+'px'; d.style.background=color; d.style.borderRadius=r+'px'; }
+// Linia ukosna (iskry piktogramu): epd_draw_line przybliza rotowany pasek 2 px.
+function dline(x0,y0,x1,y1){ const dx=x1-x0, dy=y1-y0, len=Math.hypot(dx,dy);
+  const d=el('rr'); d.style.left=x0+'px'; d.style.top=(y0-1)+'px'; d.style.width=len+'px';
+  d.style.height='2px'; d.style.background=C.ink; d.style.transformOrigin='0 1px';
+  d.style.transform='rotate('+Math.atan2(dy,dx)+'rad)'; }
+// 7-seg jak drawDigit() w EpdDashboard.cpp.
+const SEG=[0x3F,0x06,0x5B,0x4F,0x66,0x6D,0x7D,0x07,0x7F,0x6F];
+function segDigit(x,y,w,h,t,m){
+  if(m&0x01) rect(x,y,w,t,1);
+  if(m&0x02) rect(x+w-t,y,t,h/2,1);
+  if(m&0x04) rect(x+w-t,y+h/2,t,h/2,1);
+  if(m&0x08) rect(x,y+h-t,w,t,1);
+  if(m&0x10) rect(x,y+h/2,t,h/2,1);
+  if(m&0x20) rect(x,y,t,h/2,1);
+  if(m&0x40) rect(x,y+(h-t)/2,w,t,1);
+}
+// Ikona baterii: obrys + nub + wypelnienie proporcjonalne (pct<0 = pusta).
+function batteryIcon(x,y,w,h,pct){
+  rect(x,y,w,h,0);
+  rect(x+w, y+h/2-h/6, 4, h/3, 1);
+  if(pct>=0){ const inner=Math.floor((w-6)*pct/100); if(inner>0) rect(x+3,y+3,inner,h-6,1); }
+}
+
+// --- naglowek: etykieta stanu + badge baterii (uklad 1:1 z drawSetupScreen) ---
+text(M, 10, 'Pstryk - Pierwsze uruchomienie', 1);
+const bat = BAT>=0 ? `BAT ${BAT} %` : 'BAT ?';
+const batX = W-M-textW(bat,1);
+text(batX, 10, bat, 1);
+batteryIcon(batX-40-12, 16, 36, 18, BAT);
+hline(M, 52, W-2*M);
+
+// --- plakietka marki: cien, czarna plyta, bialy schodkowy piorun ---
+rrect(82, 124, 280, 280, 56, C.light);
+rrect(70, 112, 280, 280, 56, C.ink);
+for (let i = 0; i < 12; ++i) rect(234 - 6*i, 156 + 8*i, 52, 9, 1, C.bg);
+rect(142, 252, 114, 32, 1, C.bg);
+for (let i = 0; i < 8; ++i)  rect(196 - 6*i, 284 + 8*i, 44, 9, 1, C.bg);
+
+// --- prawa kolumna: powitanie i obietnica z mini-wykresem ---
+const cx = 420;
+text(cx, 96, 'Czesc, jestem Pstryk.', 2);
+text(cx, 157, 'Pokaze Ci, kiedy prad jest tani,', 1);
+text(cx, 187, 'a kiedy lepiej poczekac.', 1);
+rect(798, 202, 14, 10, 1, C.mid);
+rect(818, 196, 14, 16, 1, C.mid);
+rect(838, 188, 14, 24, 1, C.ink);
+rect(858, 200, 14, 12, 1, C.mid);
+rect(878, 192, 14, 20, 1, C.ink);
+hline(796, 212, 98);
+
+// --- blok akcji: piktogram, naglowek, 7-seg "3", linia zwalniania ---
+rrect(422, 300, 52, 52, 26, C.ink);
+rrect(430, 308, 36, 36, 18, C.bg);
+rrect(441, 282, 14, 36, 7, C.ink);
+dline(424, 270, 432, 278);
+dline(472, 270, 464, 278);
+text(488, 252, 'Przytrzymaj przycisk', 2);
+segDigit(488, 309, 35, 60, 8, SEG[3]);
+text(539, 333, 'sekundy', 2);
+text(cx, 386, 'Trzymaj, az pokaze ustawienia.', 1, C.dark);
+
+// --- pasek "Przygotuj": 4 checkboxy + sciezka do klucza API ---
+hline(M, 428, W-2*M);
+text(M, 442, 'Przygotuj:', 1);
+let cbX = M + textW('Przygotuj:',1) + 16;
+for (const item of ['telefon', 'haslo Wi-Fi', 'klucz API', 'ladowarka']) {
+  rect(cbX, 448, 18, 18, 0);
+  rect(cbX+1, 449, 16, 16, 0);          // podwojny obrys = optyczne 2 px
+  text(cbX+28, 442, item, 1);
+  cbX += 28 + textW(item,1) + 28;
+}
+const kx = M + 1;                       // por. komentarz przy ikonie klucza w C++
+rrect(kx, 478, 20, 20, 10, C.ink);
+rrect(kx+5, 483, 10, 10, 5, C.bg);
+rect(kx+18, 486, 34, 4, 1);
+rect(kx+40, 490, 4, 8, 1);
+rect(kx+48, 490, 4, 8, 1);
+text(88, 474, 'Klucz API: Pstryk > Konto > Urzadzenia i integracje', 1, C.dark);
+
+// --- stopka: wersja; przy niskiej baterii cicha zapowiedz glosem portalu ---
+text(20, 516, VER, 1, '#787878');
+if (BAT >= 0 && BAT < 20) {
+  const chg = 'Podlacz mnie do ladowarki';
+  text(W-M-textW(chg,1), 516, chg, 1, C.dark);
+}
+</script>
+</body>
+</html>

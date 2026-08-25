@@ -95,6 +95,16 @@ RTC_DATA_ATTR static uint32_t g_clockFail = 0;
 // more than an immediate "rate limited" screen, and the API allows ~3 req/h while
 // one wake can spend all three on the in-cycle retry.
 RTC_DATA_ATTR static uint32_t g_rateFail = 0;
+// Automatyczne (timerowe) otwarcia portalu konfiguracyjnego od ostatniej
+// interakcji czlowieka. Portal to najdrozszy energetycznie stan plytki (SoftAP
+// ~100 mA przez maks. 10 min), a bez kompletnej konfiguracji KAZDE wybudzenie
+// co 6 h otwieralo go od nowa -- urzadzenie czekajace w pudelku na klienta
+// zjadalo ogniwo w ~1-1.5 miesiaca i pod progiem 3.35 V klient wyjmowal
+// z pudelka ekran "Bateria rozladowana" zamiast wizytowki. Pula odnawia sie po
+// kazdym przytrzymaniu przycisku i po udanej konfiguracji; utrata zasilania
+// zeruje RTC RAM (= swieza pula), co przy wlozeniu ogniwa jest pozadane.
+RTC_DATA_ATTR static uint32_t g_autoPortalOpens = 0;
+static const uint32_t kMaxAutoPortalOpens = 4;
 
 static int bcd2dec(uint8_t b) { return (b >> 4) * 10 + (b & 0x0F); }
 static uint8_t dec2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
@@ -282,6 +292,18 @@ static void setupScreen(EpdRenderer& g, int batteryPct) {
   drawSetupScreen(g, si);
 }
 
+// Rytual zatrzaskow jak wyzej. Deep clean ma tu wlasny powod poza spojnoscia:
+// ekran zostaje na panelu przez caly pobyt w pudelku (e-papier trzyma obraz bez
+// zasilania), a wielkie czarne pole plakietki marki najlatwiej ze wszystkiego,
+// co rysujemy, zostawia ducha pod nastepnym pelnym przemalowaniem.
+static void welcomeScreen(EpdRenderer& g, int batteryPct) {
+  g_lastDrawSig = 0;
+  g_authShown = 0;
+  g_lastDeepCleanDay = 0;
+  g.requestDeepClean();
+  drawWelcomeScreen(g, batteryPct);
+}
+
 #ifdef PSTRYK_OTA_BOOTSTRAP
 // Installer image: provision Wi-Fi (+ API key, saved to NVS for the real firmware),
 // then force-install the latest signed release for this board and reboot into it.
@@ -345,6 +367,7 @@ void SleepCycle::setup() {
   EpdStatus st; st.batteryPct = batPct; st.batteryLow = batLow;
 
   bool held = buttonHeld(3000);
+  if (held) g_autoPortalOpens = 0;   // czlowiek przy plytce -> pula otwarc od nowa
   bool wantsPortal = held || !settings_.isComplete();
 
   // 2) Deep-discharge floor: below ~3.35 V both the radio burst and the panel
@@ -363,6 +386,18 @@ void SleepCycle::setup() {
 
   // 3) reconfigure: button held at boot, or no usable saved config
   if (wantsPortal) {
+    // Nienadzorowane otwarcia sa limitowane pula kMaxAutoPortalOpens. Po jej
+    // wyczerpaniu wybudzenie timerowe NIE podnosi SoftAP -- tylko odswieza
+    // ekran powitalny (badge baterii ma mowic prawde przy rozpakowaniu)
+    // i spi dalej. Ta galaz musi zawracac PRZED WiFiProvisionerem: sciezka
+    // wspolna nizej probowalaby autoConnect na niekompletnej konfiguracji
+    // i WiFiManager sam otworzylby portal, obchodzac limit.
+    if (!held && g_autoPortalOpens >= kMaxAutoPortalOpens) {
+      welcomeScreen(gfx_, batPct);
+      sleepFor(6u * 3600u);            // przycisk (ext0) dziala natychmiast
+      return;
+    }
+    if (!held) ++g_autoPortalOpens;    // przed portalem: brownout w trakcie tez sie liczy
     setupScreen(gfx_, batPct);   // batPct z odczytu w kroku 1 (przed Wi-Fi)
     WiFiProvisioner prov;
     prov.ensureConnected(settings_, /*forcePortal=*/true);
@@ -375,9 +410,10 @@ void SleepCycle::setup() {
       g_cache.count = 0;              // fresh config -> force a fetch next cycle
       g_authShown = 0; g_consecFail = 0; g_wifiFail = 0;
       g_clockFail = 0; g_rateFail = 0;
+      g_autoPortalOpens = 0;          // skonfigurowane -> pelna pula na przyszlosc
       sleepFor(2);                    // wake immediately to run a normal cycle
     } else {
-      msgScreen(gfx_, "Konfiguracja niepelna", "Przytrzymaj przycisk");
+      welcomeScreen(gfx_, batPct);    // wizytowka w pudelku, nie komunikat bledu
       sleepFor(6u * 3600u);           // a held button reopens the portal at once (ext0)
     }
     return;

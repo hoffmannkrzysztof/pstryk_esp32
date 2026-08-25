@@ -210,10 +210,18 @@ liczy się jako gotowa.
 
 Portal zamyka się sam po ~10 minutach bezczynności. Jeśli konfiguracja jest wtedy
 kompletna, e-paper wraca do normalnej pracy po ~2 s. Jeśli nie (portal porzucony
-albo brak klucza), pokazuje `Konfiguracja niepelna` i **zasypia na 6 h** zamiast
-otwierać portal od nowa — SoftAP pobiera ~100 mA i pętla „portal → 2 s snu →
-portal" rozładowywała ogniwo w kilkanaście godzin. Przytrzymanie przycisku otwiera
-portal natychmiast, więc nie trzeba czekać.
+albo brak klucza), pokazuje **ekran powitalny** — wizytówkę z logo, instrukcją
+„przytrzymaj przycisk 3 sekundy" i listą rzeczy do przygotowania (telefon, hasło
+Wi-Fi, klucz API, ładowarka) — i **zasypia na 6 h** zamiast otwierać portal od
+nowa: SoftAP pobiera ~100 mA i pętla „portal → 2 s snu → portal" rozładowywała
+ogniwo w kilkanaście godzin. Przytrzymanie przycisku otwiera portal natychmiast,
+więc nie trzeba czekać. Kolejne wybudzenia ponawiają portal automatycznie, ale
+najwyżej **4 razy** od ostatniej interakcji (przytrzymania przycisku) — potem
+urządzenie tylko odświeża ekran powitalny i czeka na przycisk. Bez tego limitu
+urządzenie czekające w pudełku na klienta traciło ~40 min SoftAP dziennie
+i rozładowywało ogniwo w ok. miesiąc. E-papier trzyma obraz bez zasilania, więc ten sam ekran
+powitalny jest tym, co klient widzi po wyjęciu urządzenia z pudełka
+(makieta: `docs/mockups/epaper-welcome.html`).
 
 ---
 

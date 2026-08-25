@@ -27,6 +27,12 @@ struct SetupInfo {
 // do sieci, kroki 1-2-3 i prosba o podlaczenie ladowarki. Flushuje panel.
 void drawSetupScreen(IRenderer& r, const SetupInfo& info);
 
+// Ekran powitalny (pierwsze uruchomienie / konfiguracja niedokonczona):
+// plakietka marki, obietnica wartosci, "przytrzymaj przycisk 3 sekundy",
+// pasek "Przygotuj". E-papier trzyma obraz bez zasilania, wiec ten ekran
+// jest twarza produktu w pudelku. batteryPct: -1 = nieznany. Flushuje panel.
+void drawWelcomeScreen(IRenderer& r, int batteryPct);
+
 // White-background status/error message for the e-paper board (boot, errors).
 void drawMessage(IRenderer& r, const char* line1, const char* line2);
 
