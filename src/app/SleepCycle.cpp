@@ -101,8 +101,12 @@ RTC_DATA_ATTR static uint32_t g_rateFail = 0;
 // co 6 h otwieralo go od nowa -- urzadzenie czekajace w pudelku na klienta
 // zjadalo ogniwo w ~1-1.5 miesiaca i pod progiem 3.35 V klient wyjmowal
 // z pudelka ekran "Bateria rozladowana" zamiast wizytowki. Pula odnawia sie po
-// kazdym przytrzymaniu przycisku i po udanej konfiguracji; utrata zasilania
-// zeruje RTC RAM (= swieza pula), co przy wlozeniu ogniwa jest pozadane.
+// kazdym dotknieciu przycisku -- wybudzenie ext0 (mozliwe TYLKO z przycisku,
+// wiec krotkie nacisniecie liczy sie tak samo jak przytrzymanie przy rozruchu)
+// -- i po udanej konfiguracji; utrata zasilania zeruje RTC RAM (= swieza
+// pula), co przy wlozeniu ogniwa jest pozadane. Odnawianie wylacznie
+// przytrzymaniem robilo z wyczerpanej puli "zepsuty przycisk": krotkie
+// nacisniecie na ekranie powitalnym przemalowywalo ten sam ekran, bez portalu.
 RTC_DATA_ATTR static uint32_t g_autoPortalOpens = 0;
 static const uint32_t kMaxAutoPortalOpens = 4;
 
@@ -353,9 +357,13 @@ void SleepCycle::setup() {
   return;
 #endif
 
-  // A held button opens the captive portal; a short-press (ext0) wake means
-  // "refresh now" and is forced through the network path by
-  // needsNetwork(buttonWake=true) in the cache gate.
+  // Przycisk. Konfiguracja kompletna: przytrzymanie (3 s) otwiera portal,
+  // krotkie nacisniecie (wybudzenie ext0) znaczy "odswiez teraz" i idzie sila
+  // przez sciezke sieciowa (needsNetwork(buttonWake=true) w bramce cache).
+  // Konfiguracja NIEKOMPLETNA: kazde dotkniecie, krotkie czy dlugie, otwiera
+  // portal od razu -- ekran powitalny mowi "Nacisnij i pusc", wiec krotkie
+  // nacisniecie musi dzialac dokladnie tak jak przytrzymanie (spec
+  // docs/superpowers/specs/2026-09-02-setup-ux-polish-portal-and-button-cue-design.md, B.2).
   settings_.load();
 
   // 1) battery FIRST: ADC2 conflicts with Wi-Fi, and the portal below raises
@@ -367,13 +375,21 @@ void SleepCycle::setup() {
   EpdStatus st; st.batteryPct = batPct; st.batteryLow = batLow;
 
   bool held = buttonHeld(3000);
-  if (held) g_autoPortalOpens = 0;   // czlowiek przy plytce -> pula otwarc od nowa
+  // ext0 budzi WYLACZNIE przycisk (pull-up trzymany przez deep sleep, patrz
+  // sleepFor), wiec takie wybudzenie = czlowiek przy plytce, nawet gdy puscil
+  // przycisk, zanim buttonHeld zdazyl go zobaczyc. Jedna zmienna na caly
+  // setup(): krok 3.5 uzywa jej w bramce cache.
+  bool buttonWake = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0;
+  bool human = held || buttonWake;
+  if (human) g_autoPortalOpens = 0;  // czlowiek przy plytce -> pula otwarc od nowa
   bool wantsPortal = held || !settings_.isComplete();
 
   // 2) Deep-discharge floor: below ~3.35 V both the radio burst and the panel
   // flash abuse the cell. Park with one clear message and re-check every 6 h
   // until a charger brings the voltage back. A HELD button overrides the park:
-  // a human is present, so servicing the board has to stay possible.
+  // a human is present, so servicing the board has to stay possible. Only HELD,
+  // not `human`: a short press must not raise SoftAP on a flat cell -- the park
+  // screen already says what to do (charge it).
   if (batVolts >= kBattImplausibleV && batVolts < kBattParkV && !held) {
     if (!g_lowBattParked) {
       msgScreen(gfx_, "Bateria rozladowana", "Podlacz ladowarke");
@@ -384,20 +400,25 @@ void SleepCycle::setup() {
   }
   g_lowBattParked = 0;
 
-  // 3) reconfigure: button held at boot, or no usable saved config
+  // 3) reconfigure: button held at boot, or no usable saved config (where any
+  //    button press, short or held, counts as an attended wake -- see `human`)
   if (wantsPortal) {
-    // Nienadzorowane otwarcia sa limitowane pula kMaxAutoPortalOpens. Po jej
-    // wyczerpaniu wybudzenie timerowe NIE podnosi SoftAP -- tylko odswieza
-    // ekran powitalny (badge baterii ma mowic prawde przy rozpakowaniu)
-    // i spi dalej. Ta galaz musi zawracac PRZED WiFiProvisionerem: sciezka
-    // wspolna nizej probowalaby autoConnect na niekompletnej konfiguracji
-    // i WiFiManager sam otworzylby portal, obchodzac limit.
-    if (!held && g_autoPortalOpens >= kMaxAutoPortalOpens) {
+    // Nienadzorowane (timerowe) otwarcia sa limitowane pula kMaxAutoPortalOpens.
+    // Po jej wyczerpaniu wybudzenie timerowe NIE podnosi SoftAP -- tylko
+    // odswieza ekran powitalny (badge baterii ma mowic prawde przy
+    // rozpakowaniu) i spi dalej. Bramka to !human, nie !held: wybudzenie
+    // przyciskiem (takze krotkim) jest nadzorowane, wiec omija pule i jej nie
+    // zuzywa -- inaczej po wyczerpaniu puli "Nacisnij i pusc" z ekranu
+    // powitalnego przemalowywalo tylko ten sam ekran. Ta galaz musi zawracac
+    // PRZED WiFiProvisionerem: sciezka wspolna nizej probowalaby autoConnect
+    // na niekompletnej konfiguracji i WiFiManager sam otworzylby portal,
+    // obchodzac limit.
+    if (!human && g_autoPortalOpens >= kMaxAutoPortalOpens) {
       welcomeScreen(gfx_, batPct);
       sleepFor(6u * 3600u);            // przycisk (ext0) dziala natychmiast
       return;
     }
-    if (!held) ++g_autoPortalOpens;    // przed portalem: brownout w trakcie tez sie liczy
+    if (!human) ++g_autoPortalOpens;   // przed portalem: brownout w trakcie tez sie liczy
     setupScreen(gfx_, batPct);   // batPct z odczytu w kroku 1 (przed Wi-Fi)
     WiFiProvisioner prov;
     prov.ensureConnected(settings_, /*forcePortal=*/true);
@@ -414,7 +435,7 @@ void SleepCycle::setup() {
       sleepFor(2);                    // wake immediately to run a normal cycle
     } else {
       welcomeScreen(gfx_, batPct);    // wizytowka w pudelku, nie komunikat bledu
-      sleepFor(6u * 3600u);           // a held button reopens the portal at once (ext0)
+      sleepFor(6u * 3600u);           // kazde nacisniecie (ext0) otwiera portal od razu
     }
     return;
   }
@@ -430,10 +451,10 @@ void SleepCycle::setup() {
 
   // 3.5) Radio-free wake: when the cached frames already cover this hour and
   // nothing needs the network (fresh NTP, no OTA due, tomorrow present or not
-  // needed yet, no DST ambiguity, not a button press), repaint from the cache
-  // and go back to sleep without ever calling WiFi.begin() -- the radio phase
-  // dominates the energy cost of a wake, and the prices cannot have changed.
-  bool buttonWake = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0;
+  // needed yet, no DST ambiguity, not a button press -- `buttonWake` from step
+  // 1), repaint from the cache and go back to sleep without ever calling
+  // WiFi.begin() -- the radio phase dominates the energy cost of a wake, and
+  // the prices cannot have changed.
   time_t seedNow = time(nullptr);
   if (seedNow > kTimeValid && g_cache.count > 0) {
     uint32_t ntpAge = (g_lastNtpSync > 0 && seedNow > (time_t)g_lastNtpSync)

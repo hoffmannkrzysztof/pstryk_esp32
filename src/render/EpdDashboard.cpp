@@ -307,7 +307,9 @@ void drawSetupScreen(IRenderer& r, const SetupInfo& info) {
 // zasilania, wiec to, co ten ekran namaluje po fabrycznym pierwszym rozruchu,
 // jedzie w pudelku do klienta -- wizytowka produktu, nie komunikat bledu.
 // Wspolrzedne stref: spec docs/superpowers/specs/2026-08-25-epaper-welcome-
-// screen-design.md, makieta docs/mockups/epaper-welcome.html (ta sama mapa
+// screen-design.md; blok akcji (rzad przyciskow, "Nacisnij i pusc") wg spec
+// docs/superpowers/specs/2026-09-02-setup-ux-polish-portal-and-button-cue-
+// design.md, B.1; makieta docs/mockups/epaper-welcome.html (ta sama mapa
 // liczb). Pozycje prawostronne i rzad checkboxow licza sie z textWidth() w
 // runtime -- staly x tylko tam, gdzie tekst zaczyna sie od lewej.
 void drawWelcomeScreen(IRenderer& r, int batteryPct) {
@@ -352,21 +354,51 @@ void drawWelcomeScreen(IRenderer& r, int batteryPct) {
   r.fillRect(878, 192, 14, 20, p.ink);
   r.drawLine(796, 212, 894, 212, p.mid);
 
-  // --- blok akcji: piktogram, naglowek, 7-seg "3", linia zwalniania ---
-  // Piktogram celowo abstrakcyjny (palec + okragly pierscien + iskry): pozycja
-  // fizycznego przycisku na obudowie nie jest znana, wiec zadnych strzalek.
-  // Palec PO wnetrzu -- jego dol wchodzi 10 px w biel i to jest "wcisniecie".
-  r.fillRoundRect(422, 300, 52, 52, 26, p.ink);
-  r.fillRoundRect(430, 308, 36, 36, 18, p.bg);
-  r.fillRoundRect(441, 282, 14, 36, 7, p.ink);
-  r.drawLine(424, 270, 432, 278, p.ink);
-  r.drawLine(472, 270, 464, 278, p.ink);
-  r.text(488, 252, "Przytrzymaj przycisk", p.ink, 2);
-  drawDigit(r, 488, 309, 35, 60, 8, p.ink, SEG[3]);   // rym z 7-seg haslem portalu
-  r.text(539, 333, "sekundy", p.ink, 2);
-  // E-papier nie daje zadnej reakcji przez cale 3 s trzymania -- bez tej linii
-  // czesc osob puszcza za wczesnie i uznaje, ze przycisk nie dziala.
-  r.text(cx, 386, "Trzymaj, az pokaze ustawienia.", p.dark, 1);
+  // --- blok akcji: piktogram "3 klawisze, nacisnij i pusc pierwszy od lewej",
+  //     2 linie head, 1 linia body ---
+  // Ramka piktogramu x 420..548, y 252..352 (128x100); tusz x 420..547,
+  // y 254..345. Rzad TRZECH klawiszy, bo na obudowie jest rzad przyciskow
+  // i wlasciwy jest skrajny lewy: pojedynczy przycisk nie mowilby "ktory",
+  // a strzalka poza ekran wymagalaby znajomosci krawedzi obudowy (gora/dol
+  // nadal nieznana). Stad tez zadnej sylwetki obudowy -- tylko neutralna
+  // linia bazowa, wcieta o 6 px z obu stron, zeby nie czytala sie jako
+  // listwa. Rzad wypelnia ramke co do piksela (36 px, odstep 10), zaczyna sie
+  // w kolumnie linii body (x 420), a jego gorna krawedz lezy na wierszu head
+  // "1. przycisk od lewej" (y 300): kazda linia tekstu ma swoj kawalek rysunku.
+  r.fillRoundRect(420, 300, 36, 36, 7, p.ink);   // klawisz 1 (skrajny lewy): wypelniony = ten wlasciwy
+  r.fillRoundRect(466, 300, 36, 36, 7, p.ink);   // klawisz 2: kontur 2 px (ink + bg, jak pierscien)
+  r.fillRoundRect(468, 302, 32, 32, 5, p.bg);
+  r.fillRoundRect(512, 300, 36, 36, 7, p.ink);   // klawisz 3: kontur 2 px
+  r.fillRoundRect(514, 302, 32, 32, 5, p.bg);
+  // Linia bazowa 2 px w p.dark, 8 px pod klawiszami: p.mid o grubosci 1 px
+  // ginal po kwantyzacji do 16 szarosci (sprawdzone na podgladzie posterize).
+  r.fillRect(426, 344, 116, 2, p.dark);
+  // Palec 14x36 r=7 (ksztalt jak dotad) naciska klawisz 1 od gory, na jego
+  // osi, dol 6 px w klawiszu; halo p.bg 20x42 r=10 daje 3 px biala szczeline,
+  // zeby czubek nie zlewal sie z czarnym klawiszem. Oba maja 2r == w, wiec
+  // dziala kwirk pelnego kola (patrz ikona klucza nizej), ale BEZ przesuniecia
+  // bazy o +1: dwa epd_fill_circle o srednicy 2r+1 i srodkach x+r oraz
+  // x+w-r-1 maluja razem w+2 px SYMETRYCZNIE, po 1 px z obu stron (halo
+  // 427..448, palec 430..445 -- srodek 437.5 = srodek klawisza 420..455),
+  // a +1 zepchneloby palec 1 px z osi klawisza. W pionie kwirku nie ma
+  // (h > 2r), wiec y 1:1 z makieta.
+  r.fillRoundRect(428, 267, 20, 42, 10, p.bg);   // halo palca
+  r.fillRoundRect(431, 270, 14, 36, 7, p.ink);   // palec
+  // Gest "w gore" = puszczenie: daszek ^ nad palcem (jak dawne iskry, ale
+  // zbiegajace sie w gore). Kazde ramie DWA razy (y i y+1), bo drawLine ma
+  // 1 px, a makieta rysuje 2 px -- inaczej daszek zniknalby przy ogladaniu
+  // z reki.
+  r.drawLine(426, 264, 438, 254, p.ink);   // ramie lewe (w gore do wierzcholka)
+  r.drawLine(426, 265, 438, 255, p.ink);   //   drugi piksel
+  r.drawLine(450, 264, 438, 254, p.ink);   // ramie prawe
+  r.drawLine(450, 265, 438, 255, p.ink);   //   drugi piksel
+  r.text(564, 252, "Nacisnij i pusc", p.ink, 2);        // adv 248 -> koniec 812
+  r.text(564, 300, "1. przycisk od lewej", p.ink, 2);   // adv 324 -> koniec 888, 48 px do marginesu
+  // Krotkie nacisniecie zamiast trzymania 3 s (na niekompletnej konfiguracji
+  // firmware honoruje kazde nacisniecie, SleepCycle::setup), ale e-papier
+  // odpowiada dopiero po bocie, odczycie baterii i pelnym przemalowaniu
+  // (~3-5 s) -- bez tej linii czesc osob nacisnie drugi raz.
+  r.text(cx, 386, "Za chwile pokaze ustawienia.", p.dark, 1);
 
   // --- pasek "Przygotuj": 4 checkboxy + sciezka do klucza API ---
   // Uprzedza oba najczestsze scenariusze porazki, ZANIM portal sie otworzy:
@@ -382,9 +414,11 @@ void drawWelcomeScreen(IRenderer& r, int batteryPct) {
     cbX += 28 + r.textWidth(kPrep[i], 1) + 28;
   }
   // Ikona klucza: glowka z otworem + trzon + dwa zeby. Baza M+1, nie M:
-  // fillRoundRect sklada kolo z epd_fill_circle o srednicy 2r+1, wiec pelne
-  // kolo (2r == w) maluje 1 px w lewo od nominalnego boxu (EpdRenderer.cpp:47)
-  // -- glowka na x=M wchodzilaby w margines.
+  // fillRoundRect sklada kolo z epd_fill_circle o srednicy 2r+1 wokol srodkow
+  // x+r i x+w-r-1, wiec pelne kolo (2r == w) maluje 1 px poza nominalny box
+  // z kazdej strony, takze w lewo (EpdRenderer.cpp:47) -- glowka na x=M
+  // wchodzilaby w margines. Tu +1 nie szkodzi (glowka nie musi trafiac w
+  // zadna os); palec w bloku akcji wyzej musi, dlatego tam bez +1.
   const int kx = M + 1;
   r.fillRoundRect(kx, 478, 20, 20, 10, p.ink);
   r.fillRoundRect(kx + 5, 483, 10, 10, 5, p.bg);

@@ -47,22 +47,12 @@ function rect(x,y,w,h,fill,color){ const d=el(fill?'seg':'box'); d.style.left=x+
 function hline(x,y,w){ const d=el('ln'); d.style.left=x+'px'; d.style.top=y+'px'; d.style.width=w+'px'; }
 function rrect(x,y,w,h,r,color){ const d=el('rr'); d.style.left=x+'px'; d.style.top=y+'px';
   d.style.width=w+'px'; d.style.height=h+'px'; d.style.background=color; d.style.borderRadius=r+'px'; }
-// Linia ukosna (iskry piktogramu): epd_draw_line przybliza rotowany pasek 2 px.
+// Linia ukosna (daszek piktogramu): makieta rysuje pasek 2 px; na panelu epd_draw_line
+// ma 1 px, dlatego C++ powtarza kazde ramie daszka z przesunieciem o 1 px (y i y+1).
 function dline(x0,y0,x1,y1){ const dx=x1-x0, dy=y1-y0, len=Math.hypot(dx,dy);
   const d=el('rr'); d.style.left=x0+'px'; d.style.top=(y0-1)+'px'; d.style.width=len+'px';
   d.style.height='2px'; d.style.background=C.ink; d.style.transformOrigin='0 1px';
   d.style.transform='rotate('+Math.atan2(dy,dx)+'rad)'; }
-// 7-seg jak drawDigit() w EpdDashboard.cpp.
-const SEG=[0x3F,0x06,0x5B,0x4F,0x66,0x6D,0x7D,0x07,0x7F,0x6F];
-function segDigit(x,y,w,h,t,m){
-  if(m&0x01) rect(x,y,w,t,1);
-  if(m&0x02) rect(x+w-t,y,t,h/2,1);
-  if(m&0x04) rect(x+w-t,y+h/2,t,h/2,1);
-  if(m&0x08) rect(x,y+h-t,w,t,1);
-  if(m&0x10) rect(x,y+h/2,t,h/2,1);
-  if(m&0x20) rect(x,y,t,h/2,1);
-  if(m&0x40) rect(x,y+(h-t)/2,w,t,1);
-}
 // Ikona baterii: obrys + nub + wypelnienie proporcjonalne (pct<0 = pusta).
 function batteryIcon(x,y,w,h,pct){
   rect(x,y,w,h,0);
@@ -97,16 +87,38 @@ rect(858, 200, 14, 12, 1, C.mid);
 rect(878, 192, 14, 20, 1, C.ink);
 hline(796, 212, 98);
 
-// --- blok akcji: piktogram, naglowek, 7-seg "3", linia zwalniania ---
-rrect(422, 300, 52, 52, 26, C.ink);
-rrect(430, 308, 36, 36, 18, C.bg);
-rrect(441, 282, 14, 36, 7, C.ink);
-dline(424, 270, 432, 278);
-dline(472, 270, 464, 278);
-text(488, 252, 'Przytrzymaj przycisk', 2);
-segDigit(488, 309, 35, 60, 8, SEG[3]);
-text(539, 333, 'sekundy', 2);
-text(cx, 386, 'Trzymaj, az pokaze ustawienia.', 1, C.dark);
+// --- blok akcji: piktogram "3 klawisze, nacisnij i pusc pierwszy od lewej" + 2 linie head + 1 body ---
+// Ramka piktogramu: x 420..548, y 252..352 (128x100). Tylko rrect/rect/dline (= fillRoundRect/
+// fillRect/drawLine w firmware), bez tekstu. Rzad 3 klawiszy 36x36 r=7, odstep 10: x = 420, 466, 512,
+// y 300..336 -- rzad wypelnia ramke co do piksela (420..548) i zaczyna sie w tej samej kolumnie co
+// linia body nizej (x 420), a gorna krawedz klawiszy lezy na wierszu head "1. przycisk od lewej"
+// (y 300): kazda linia tekstu ma swoj fragment rysunku. Skrajny LEWY jest wypelniony = ten wlasciwy,
+// dwa pozostale to kontur 2 px (rrect ink + rrect bg, jak pierscien). Bez sylwetki obudowy (krawedz
+// gora/dol nieznana) - tylko neutralna linia bazowa, wcieta o 6 px z obu stron, wiec konczy sie
+// przed ramka i nie czyta sie jako listwa obudowy.
+rrect(420, 300, 36, 36, 7, C.ink);        // klawisz 1 (skrajny lewy): wypelniony = ten wlasciwy
+rrect(466, 300, 36, 36, 7, C.ink);        // klawisz 2: kontur 2 px (ink + bg w srodku, jak pierscien)
+rrect(468, 302, 32, 32, 5, C.bg);
+rrect(512, 300, 36, 36, 7, C.ink);        // klawisz 3: kontur 2 px
+rrect(514, 302, 32, 32, 5, C.bg);
+rect(426, 344, 116, 2, 1, C.dark);        // linia bazowa: 2 px dark (mid 1 px gubi sie po kwantyzacji),
+                                          //   8 px pod klawiszami - lezy pod rzedem, nie dotyka go
+// Palec 14x36 r=7 (ksztalt jak dotad) naciska klawisz 1 od gory (os x = 438 = srodek klawisza),
+// dol 6 px w klawiszu. Halo bg 20x42 r=10 daje 3 px biala szczeline: czubek palca nie zlewa sie
+// z czarnym klawiszem. Oba to pelne kola (2r == w) - kwirk 2r+1 przesuwa je zgodnie, szczelina
+// zostaje koncentryczna.
+rrect(428, 267, 20, 42, 10, C.bg);        // halo palca
+rrect(431, 270, 14, 36, 7, C.ink);        // palec
+// Gest "w gore" = puszczenie: daszek ^ nad palcem (jak dawne iskry, ale zbiegajace sie w gore).
+// Kazde ramie rysowane DWA razy (y i y+1), bo drawLine na panelu ma 1 px - inaczej daszek bylby
+// o polowe cienszy niz w tej makiecie i zniknal przy ogladaniu z reki.
+dline(426, 264, 438, 254);                // ramie lewe (w gore do wierzcholka)
+dline(426, 265, 438, 255);                //   drugi piksel
+dline(450, 264, 438, 254);                // ramie prawe
+dline(450, 265, 438, 255);                //   drugi piksel
+text(564, 252, 'Nacisnij i pusc', 2);
+text(564, 300, '1. przycisk od lewej', 2);
+text(cx, 386, 'Za chwile pokaze ustawienia.', 1, C.dark);
 
 // --- pasek "Przygotuj": 4 checkboxy + sciezka do klucza API ---
 hline(M, 428, W-2*M);
