@@ -22,3 +22,7 @@ secrets.h
 # Editor / OS
 .vscode/
 .DS_Store
+
+# Python bytecode from tools/*.py
+__pycache__/
+*.pyc
