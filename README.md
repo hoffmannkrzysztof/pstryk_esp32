@@ -71,9 +71,12 @@ ekranie 960×540. Panel jest bistabilny — trzyma obraz „za darmo" podczas de
 - 🕒 Strefa **Europe/Warsaw** z obsługą czasu letniego/zimowego (POSIX TZ), synchronizacja NTP.
 - 📊 Logika cen liczona po stronie urządzenia: cena bieżąca, najtańsza/najdroższa
   godzina, średnia dzienna, trend następnej godziny, wykrycie czy „jutro" już jest.
-- 📶 **Konfiguracja przez captive portal** (WiFiManager) — Wi-Fi + klucz API w
-  formularzu WWW; portal jest **zabezpieczony WPA2**, a jego jednorazowe hasło
-  wyświetla się na ekranie urządzenia.
+- 📶 **Konfiguracja przez captive portal po polsku** (WiFiManager z własnym
+  plikiem stringów) — lista sieci Wi-Fi, hasło i klucz API w jednym formularzu;
+  klucz jest **wymagany** przy pierwszej konfiguracji, a przy rekonfiguracji da
+  się zmienić sam klucz bez przepisywania hasła Wi-Fi. Portal jest
+  **zabezpieczony WPA2**, a jego jednorazowe hasło wyświetla się na ekranie
+  urządzenia (e-paper: także jako kod QR).
 - ⏱️ **Strategia odświeżania bezpieczna dla limitu** API (3 zapytania/godzinę).
 - 🔋 e-paper: pomiar baterii, RTC PCF8563, deep-sleep; **cache cen w RTC RAM**
   sprawia, że większość godzinnych budzeń w ogóle nie włącza radia, a Wi-Fi
@@ -126,7 +129,8 @@ src/
   main.cpp                  setup/loop → App lub SleepCycle (wg makra płytki)
   core/                     rdzeń: PstrykClient, PstrykParse, PriceLogic,
                             TimeService, RefreshPolicy, Settings, Battery, Format
-  net/                      PstrykClient (transport), WiFiProvisioner
+  net/                      PstrykClient (transport), WiFiProvisioner,
+                            wm_strings_pl.h (teksty/HTML portalu po polsku)
   view/PriceView.h          struktura gotowa do wyświetlenia (szew rdzeń↔render)
   render/
     IRenderer.h             abstrakcja renderera
@@ -137,6 +141,8 @@ src/
     App.*                   orkiestracja LCD (always-on)
     SleepCycle.*            orkiestracja e-paper (deep-sleep) + PCF8563 + bateria
 test/                       testy jednostkowe (Unity) uruchamiane na hoście (env: native)
+tools/                      podpis OTA, epd_textwidth.py (szerokość napisów
+                            fontami e-papieru), portal_preview.py (podgląd portalu)
 docs/                       specyfikacje, plany, makiety i zrzuty ekranu
 ```
 
@@ -191,37 +197,56 @@ pio device monitor -e t5_epaper_s3
 
 1. Po pierwszym starcie (lub gdy brak zapisanej konfiguracji) urządzenie tworzy
    sieć Wi-Fi **`Pstryk-Setup`**, zabezpieczoną **WPA2** — hasło (8 cyfr,
-   losowane przy każdym uruchomieniu) jest **wyświetlane na ekranie urządzenia**.
+   losowane przy każdym uruchomieniu) jest **wyświetlane na ekranie urządzenia**
+   (e-paper: także jako kod QR do zeskanowania telefonem).
 2. Połącz się z nią telefonem/laptopem, podając hasło z ekranu — otworzy się
-   **captive portal**.
-3. Wpisz **SSID i hasło Wi-Fi** oraz **klucz API Pstryk** i zapisz.
-4. Urządzenie restartuje się, łączy z Wi-Fi, synchronizuje czas (NTP) i pobiera ceny.
+   **portal konfiguracyjny po polsku** (gdyby nie otworzył się sam: `192.168.4.1`).
+3. Strona główna prowadzi krok po kroku: wybierz **swoją sieć Wi-Fi** z listy
+   i wpisz jej hasło, wklej **klucz API Pstryk** (aplikacja Pstryk → Konto →
+   Urządzenia i integracje → wygeneruj klucz) i naciśnij **„Zapisz i połącz"**.
+   Przy pierwszej konfiguracji pole klucza jest **wymagane** — formularz bez
+   klucza nie da się wysłać, bo urządzenie nie miałoby czego pobierać, a zapisana
+   „połowa" konfiguracji nie liczy się jako gotowa.
+4. Urządzenie łączy się z Wi-Fi, synchronizuje czas (NTP) i pobiera ceny. Przy
+   błędnym haśle Wi-Fi portal zostaje otwarty: po ponownym wejściu na jego
+   stronę główną zobaczysz przyczynę, a wpisany klucz nadal siedzi w formularzu.
 
 Aby zmienić konfigurację później:
 
-- **LCD:** przytrzymaj przycisk **BOOT** — ponownie otworzy captive portal.
-- **e-paper:** przytrzymaj **przycisk użytkownika (GPIO 21) ≥ 3 s** przy starcie/wybudzeniu.
+- **LCD:** przytrzymaj przycisk **BOOT** — ponownie otworzy portal.
+- **e-paper, urządzenie skonfigurowane:** przytrzymaj **pierwszy przycisk od
+  lewej ≥ 3 s** przy starcie/wybudzeniu (krótkie naciśnięcie = „odśwież teraz").
+- **e-paper, konfiguracja niedokończona (ekran powitalny):** wystarczy
+  **nacisnąć i puścić** pierwszy przycisk od lewej — każde wybudzenie przyciskiem
+  otwiera portal natychmiast, także po wyczerpaniu puli automatycznych otwarć
+  opisanej niżej. Ekran mówi dokładnie to: „Nacisnij i pusc 1. przycisk od lewej".
 
 Przy rekonfiguracji pole klucza API jest **celowo puste** (formularz nie zdradza
-zapisanego klucza) — pozostaw je puste, aby zachować dotychczasowy klucz. Przy
-**pierwszej** konfiguracji klucz jest **wymagany** (pole jest wtedy tak opisane):
-bez niego urządzenie nie ma czego pobierać, a zapisana „połowa" konfiguracji nie
-liczy się jako gotowa.
+zapisanego klucza) — pozostaw je puste, aby zachować dotychczasowy klucz. Chcesz
+zmienić **sam klucz**? Zostaw pola sieci puste, wpisz nowy klucz i zapisz — portal
+zamknie się, a urządzenie połączy się z zapisaną siecią z nowym kluczem. Formularz
+wysłany z wszystkimi polami pustymi po prostu zamyka portal bez zmian.
 
 Portal zamyka się sam po ~10 minutach bezczynności. Jeśli konfiguracja jest wtedy
 kompletna, e-paper wraca do normalnej pracy po ~2 s. Jeśli nie (portal porzucony
 albo brak klucza), pokazuje **ekran powitalny** — wizytówkę z logo, instrukcją
-„przytrzymaj przycisk 3 sekundy" i listą rzeczy do przygotowania (telefon, hasło
-Wi-Fi, klucz API, ładowarka) — i **zasypia na 6 h** zamiast otwierać portal od
-nowa: SoftAP pobiera ~100 mA i pętla „portal → 2 s snu → portal" rozładowywała
-ogniwo w kilkanaście godzin. Przytrzymanie przycisku otwiera portal natychmiast,
-więc nie trzeba czekać. Kolejne wybudzenia ponawiają portal automatycznie, ale
-najwyżej **4 razy** od ostatniej interakcji (przytrzymania przycisku) — potem
-urządzenie tylko odświeża ekran powitalny i czeka na przycisk. Bez tego limitu
-urządzenie czekające w pudełku na klienta traciło ~40 min SoftAP dziennie
-i rozładowywało ogniwo w ok. miesiąc. E-papier trzyma obraz bez zasilania, więc ten sam ekran
-powitalny jest tym, co klient widzi po wyjęciu urządzenia z pudełka
-(makieta: `docs/mockups/epaper-welcome.html`).
+„naciśnij i puść pierwszy przycisk od lewej" i listą rzeczy do przygotowania
+(telefon, hasło Wi-Fi, klucz API, ładowarka) — i **zasypia na 6 h** zamiast
+otwierać portal od nowa: SoftAP pobiera ~100 mA i pętla „portal → 2 s snu →
+portal" rozładowywała ogniwo w kilkanaście godzin. Naciśnięcie przycisku otwiera
+portal natychmiast, więc nie trzeba czekać. Kolejne wybudzenia **timerowe**
+ponawiają portal automatycznie, ale najwyżej **4 razy** od ostatniej interakcji
+(naciśnięcia przycisku) — potem urządzenie tylko odświeża ekran powitalny i czeka
+na przycisk. Bez tego limitu urządzenie czekające w pudełku na klienta traciło
+~40 min SoftAP dziennie i rozładowywało ogniwo w ok. miesiąc. E-papier trzyma
+obraz bez zasilania, więc ten sam ekran powitalny jest tym, co klient widzi po
+wyjęciu urządzenia z pudełka (makieta: `docs/mockups/epaper-welcome.html`).
+
+Teksty portalu żyją w `src/net/wm_strings_pl.h` (podmiana pliku stringów
+WiFiManagera flagą `-DWM_STRINGS_FILE` w `platformio.ini`); podgląd stron bez
+płytki: `python3 tools/portal_preview.py <katalog>`. Szerokości napisów na
+e-papierze liczy `python3 tools/epd_textwidth.py "napis"` z tablic glifów
+wkompilowanych fontów.
 
 ---
 

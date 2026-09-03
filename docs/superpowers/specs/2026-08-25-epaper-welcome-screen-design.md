@@ -253,3 +253,23 @@ zamrożeniem współrzędnych.
   i równość plastrów pioruna po kwantyzacji do 16 odcieni.
 - Pozycja fizycznego przycisku na obudowie: jeśli zostanie potwierdzona,
   strzałka kierunkowa przy piktogramie to tania, silna poprawa intuicyjności.
+
+## Zmiany 2026-09-02 (patrz `2026-09-02-setup-ux-polish-portal-and-button-cue-design.md`)
+
+- **Pozycja przycisku jest znana**: na obudowie jest rząd przycisków, właściwy
+  jest **skrajny lewy**. Ograniczenie „zakaz strzałek poza ekran" pozostaje
+  (krawędź obudowy — góra/dół — nadal nieznana), ale piktogram nie musi już być
+  abstrakcyjny: pokazuje rząd trzech przycisków z palcem na pierwszym od lewej.
+- **Gest zmieniony z „przytrzymaj 3 sekundy" na „naciśnij i puść"**. Firmware
+  liczy odtąd każde wybudzenie przyciskiem (ext0) jako obecność człowieka
+  i otwiera portal na niekompletnej konfiguracji także po wyczerpaniu puli
+  automatycznych otwarć (`g_autoPortalOpens`). Trzymanie 3 s nadal działa.
+- Blok akcji (sekcja „Blok akcji" wyżej) zastąpiony: dwie linie head
+  `Nacisnij i pusc` / `1. przycisk od lewej` na x=564 (y=252/300), piktogram
+  w ramce 420..548 × 252..352, linia `Za chwile pokaze ustawienia.` (body,
+  p.dark, 420/386) — informuje o opóźnieniu e-papieru zamiast o trzymaniu.
+  7-segmentowa „3" i `sekundy` usunięte.
+- Metryki: „pesymistyczna metryka 15/22 px na znak" zastąpiona pomiarem
+  z tablic glifów (`tools/epd_textwidth.py`: ~11,5 px/znak body,
+  ~17 px/znak head). Współrzędne w tej spec pozostają poprawne (były liczone
+  z zapasem), ale nowe układy należy domykać narzędziem, nie szacunkiem.
