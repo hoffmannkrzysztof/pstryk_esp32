@@ -1,4 +1,5 @@
 #include "net/OtaUpdater.h"
+#include "net/HttpBody.h"
 #include "net/ota_public_key.h"
 #include "core/Version.h"
 #include "core/OtaManifest.h"
@@ -39,6 +40,7 @@ OtaResult OtaUpdater::runOnce(bool force) {
   String manifestUrl = String(kManifestBase) + PSTRYK_BOARD_ID + ".json";
   WiFiClientSecure mClient;
   mClient.setInsecure();                                  // signature is the trust anchor (v1)
+  mClient.setHandshakeTimeout(10);  // s; the default is 120 (setConnectTimeout is TCP only)
   HTTPClient mHttp;
   mHttp.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS); // GitHub -> CDN redirect
   mHttp.setConnectTimeout(8000);
@@ -60,7 +62,10 @@ OtaResult OtaUpdater::runOnce(bool force) {
     return OtaResult::FetchError;
   }
   String etag = mHttp.hasHeader("ETag") ? mHttp.header("ETag") : String();
-  String body = mHttp.getString();
+  String body;
+  // Not getString(): its read loop has no deadline, and on the Long board this
+  // call runs with the task watchdog taken off (App::loop).
+  bool complete = readHttpBody(mHttp, body, /*maxBytes=*/4096, /*budgetMs=*/10000);
   mHttp.end();
   // The ETag used to be persisted right here, before the decision gate, the
   // download, the signature check and the flash write. Every failure after this
@@ -72,7 +77,7 @@ OtaResult OtaUpdater::runOnce(bool force) {
   auto keepEtag = [&etag]() {
     if (!etag.isEmpty()) strlcpy(g_manifestEtag, etag.c_str(), sizeof(g_manifestEtag));
   };
-  if (body.isEmpty()) return OtaResult::FetchError;
+  if (!complete || body.isEmpty()) return OtaResult::FetchError;
 
   OtaManifest m;
   if (!parseManifest(body.c_str(), m)) return OtaResult::ParseError;
@@ -103,6 +108,7 @@ OtaResult OtaUpdater::runOnce(bool force) {
   // 3) Download the signed image.
   WiFiClientSecure fClient;
   fClient.setInsecure();
+  fClient.setHandshakeTimeout(10);  // s, as for the manifest
   HTTPClient fHttp;
   fHttp.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   fHttp.setConnectTimeout(8000);
@@ -127,12 +133,19 @@ OtaResult OtaUpdater::runOnce(bool force) {
 
   // 4) Install signature verification BEFORE begin(); begin() takes the TOTAL size
   //    (firmware + appended signature). end() performs the verification.
-  UpdaterRSAVerifier verifier(PUBLIC_KEY, PUBLIC_KEY_LEN, HASH_SHA256);
+  //    Static, not a local: Update keeps the pointer after this function returns
+  //    (nothing ever clears it), so a failed attempt used to leave the global
+  //    updater pointing at a dead stack object.
+  static UpdaterRSAVerifier verifier(PUBLIC_KEY, PUBLIC_KEY_LEN, HASH_SHA256);
   if (!Update.installSignature(&verifier)) { fHttp.end(); return OtaResult::VerifyError; }
   if (!Update.begin(total)) { fHttp.end(); return OtaResult::FlashError; }
 
   NetworkClient* stream = fHttp.getStreamPtr();
-  if (!stream) { fHttp.end(); return OtaResult::FetchError; }
+  if (!stream) {
+    fHttp.end();
+    Update.abort();   // or the updater stays "running" and refuses every later attempt
+    return OtaResult::FetchError;
+  }
   size_t written = Update.writeStream(*stream);
   fHttp.end();
   if (written != total) {

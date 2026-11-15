@@ -1,9 +1,18 @@
 #include "net/PstrykClient.h"
+#include "net/HttpBody.h"
 #include "core/PstrykParse.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
 namespace pstryk {
+
+// Wall-clock budget for reading the ~20 KB body once the headers are in. The
+// slow part of a cold-wake request is the server's time to first byte, which
+// setTimeout() below covers; after that the body follows within a second.
+static const uint32_t kBodyBudgetMs = 15000;
+// ~48 hourly frames of ~420 B each is ~21 KB; the cap only has to stop a broken
+// or hostile length (the TLS session is unauthenticated) from eating the heap.
+static const size_t kMaxBodyBytes = 128u * 1024u;
 
 static String urlEncodeIso(const char* iso) {
   String s;
@@ -20,10 +29,14 @@ static FetchResult attempt(const String& url, const String& authHeader, PriceDat
   FetchResult r;
   WiFiClientSecure client;
   client.setInsecure();  // v1: skip cert validation (personal device)
+  // setConnectTimeout() below bounds only the TCP connect. The TLS handshake has
+  // its own limit, 120 s by default -- per attempt, with three attempts per
+  // e-paper wake. A real handshake here takes a second or two.
+  client.setHandshakeTimeout(10);   // seconds
 
   HTTPClient https;
   https.setConnectTimeout(8000);
-  https.setTimeout(12000);   // cold-wake API responses can legitimately take >8 s; retried by caller
+  https.setTimeout(12000);   // headers: cold-wake API responses can legitimately take >8 s
   if (!https.begin(client, url)) {
     r.status = FetchStatus::NetworkError;
     return r;
@@ -37,9 +50,14 @@ static FetchResult attempt(const String& url, const String& authHeader, PriceDat
   r.httpCode = code;
 
   if (code == 200) {
-    String body = https.getString();
-    if (body.isEmpty()) log_e("PstrykClient: empty body (OOM or zero-length response)");
+    String body;
+    bool complete = readHttpBody(https, body, kMaxBodyBytes, kBodyBudgetMs);   // not getString()
     https.end();
+    if (!complete) {
+      log_e("PstrykClient: body incomplete (%u bytes read)", (unsigned)body.length());
+      r.status = FetchStatus::NetworkError;   // retryable, like a read timeout
+      return r;
+    }
     r.status = parsePricing(body.c_str(), out) ? FetchStatus::Ok : FetchStatus::ParseError;
     return r;
   }
