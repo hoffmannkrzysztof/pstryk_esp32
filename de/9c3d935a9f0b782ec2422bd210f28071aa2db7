@@ -1,0 +1,27 @@
+src/core/ChunkedDecoder.cpp
+  ai_agent 1-67
+src/net/PstrykClient.cpp
+  ai_agent 2,9-16,32-35,39,53-54,56-60
+test/test_body/test_body.cpp
+  ai_agent 1-207
+src/core/BodyReader.cpp
+  ai_agent 1-59
+src/net/HttpBody.h
+  ai_agent 1-19
+src/core/BodyReader.h
+  ai_agent 1-34
+src/net/HttpBody.cpp
+  ai_agent 1-59
+src/core/ChunkedDecoder.h
+  ai_agent 1-32
+src/net/OtaUpdater.cpp
+  ai_agent 2,43,65-68,80,111,136-139,144-148
+test/test_chunked/test_chunked.cpp
+  ai_agent 1-187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "de9c3d935a9f0b782ec2422bd210f28071aa2db7",
+  "prompts": {}
+}
