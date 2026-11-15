@@ -81,8 +81,9 @@ ekranie 960×540. Panel jest bistabilny — trzyma obraz „za darmo" podczas de
 - 🔋 e-paper: pomiar baterii, RTC PCF8563, deep-sleep; **cache cen w RTC RAM**
   sprawia, że większość godzinnych budzeń w ogóle nie włącza radia, a Wi-Fi
   łączy się szybciej dzięki zapamiętanemu BSSID/kanałowi/dzierżawie DHCP.
-- 🛡️ Odporność na awarie: wykładniczy backoff (60 s → 1 h), ostatni dobry ekran
-  trzymany przez krótkie przerwy w sieci, watchdog na płytce always-on,
+- 🛡️ Odporność na awarie: wykładniczy backoff (60 s → 1 h), przy awarii sieci
+  e-paper pokazuje ceny z cache'u (oznaczone „* nieakt."), twarde limity czasu
+  na każde połączenie i na całe wybudzenie, watchdog na płytce always-on,
   ochrona ogniwa przy głębokim rozładowaniu.
 - 🧩 **Czysty podział rdzeń ↔ renderowanie** — nową płytkę dodaje się pisząc tylko nowy renderer.
 
@@ -340,11 +341,22 @@ zmiany czasu doba ma 23 lub 25 h, a płaskie 48 h ucinało wtedy ostatnią godzi
   używana tylko gdy: brakuje bieżącej godziny w cache'u, trwa polowanie na
   jutro (12:00–16:00, co ~30 min), mija dobowy sync NTP / kontrola OTA,
   wciśnięto przycisk („odśwież teraz") albo zbliża się zmiana czasu.
-- Przy awarii sieci odstępy prób rosną wykładniczo (60 s → 1 h), a ekran błędu
-  pojawia się dopiero po 3 kolejnych porażkach — krótka przerwa w sieci nie
-  kasuje ostatniego poprawnego ekranu. Ta sama zasada obowiązuje teraz dla `429`
-  oraz dla braku zegara (nieustawiony RTC / zablokowany NTP), które wcześniej
-  odpowiednio kasowały ekran przy pierwszym wystąpieniu i ponawiały płaskie 120 s.
+- Przy awarii sieci odstępy prób rosną wykładniczo (60 s → 1 h), a `Retry-After`
+  wyznacza termin kolejnej próby (patrz niżej). Na e-papierze nieudana próba nie
+  zostawia starej godziny na ekranie: płytka maluje pulpit z cache'u w RTC RAM
+  i budzi się najpóźniej na najbliższą pełną godzinę, żeby „TERAZ" przeskakiwało
+  o czasie — te pośrednie budzenia nie włączają radia, sieć jest pytana dopiero
+  w terminie kolejnej próby. Znacznik „* nieakt." pojawia się po 3 kolejnych
+  porażkach; ekran błędu („Brak Wi-Fi", „Blad pobierania", „Limit zapytan") tylko
+  wtedy, gdy cache nie pokrywa bieżącej godziny — po 3 porażkach, a od razu, jeśli
+  na ekranie został pulpit z minionej godziny. Brak zegara (nieustawiony RTC /
+  zablokowany NTP) ma własny licznik i rosnące odstępy.
+- Każde połączenie HTTPS ma limity: 8 s na TCP, 10 s na uzgodnienie TLS, 12 s na
+  nagłówki (20 s przy pobieraniu obrazu aktualizacji) i 15 s na treść odpowiedzi
+  (10 s dla manifestu OTA). Na e-papierze każdy etap wybudzenia ma dodatkowo twardy
+  limit — 2 min bez radia, 6 min z siecią, 15 min na pobranie aktualizacji, 60 min
+  z otwartym portalem — po którego przekroczeniu płytka zasypia; zawieszona próba
+  sieciowa liczy się wtedy jak nieudane pobranie.
 - Nagłówek `429 Retry-After` jest respektowany, ale **przycięty do 60–3600 s** —
   wartość poza tym zakresem jest ignorowana na rzecz domyślnej. Wcześniej szła
   wprost do budzika, więc `Retry-After: 86400` zatrzymywał odświeżanie na dobę.
