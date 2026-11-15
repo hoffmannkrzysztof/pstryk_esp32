@@ -17,6 +17,7 @@
 #include <esp_sleep.h>
 #include <esp_sntp.h>
 #include <esp_attr.h>
+#include <esp_timer.h>
 #include "driver/rtc_io.h"
 #include <sys/time.h>
 #include <cstdio>
@@ -50,9 +51,9 @@ static const float kBattParkV        = 3.35f;  // deep-discharge floor: park, do
 static const float kBattLowV         = 3.45f;  // "low" badge + skip the ~2 MB OTA pull
 
 // Consecutive transient (network/parse) fetch failures, retained across deep sleep.
-// Lets a one-off cold-wake blip keep the last good e-paper image instead of wiping
-// it to an error screen; the error surfaces once after a sustained outage, and the
-// retry cadence doubles (backoffSeconds) so an outage costs ~1 wake/h, not 1/min.
+// Drives the retry backoff (backoffSeconds: a sustained outage costs ~1 attempt/h,
+// not 1/min) and, from kConfirmedFailures on, the stale marker -- and the error
+// screen, but only where the RTC cache cannot cover the hour (presentOffline).
 RTC_DATA_ATTR static uint32_t g_consecFail = 0;
 // Consecutive wakes that could not associate with Wi-Fi at all; same backoff curve.
 RTC_DATA_ATTR static uint32_t g_wifiFail = 0;
@@ -80,7 +81,9 @@ RTC_DATA_ATTR static struct { uint32_t count; RtcFrame f[kCacheMax]; } g_cache;
 // stays the authority on every connected cycle (the +2h-bug invariant).
 RTC_DATA_ATTR static uint32_t g_lastNtpSync = 0;
 // Signature of the last painted dashboard; a wake whose content is identical
-// (hunt wakes, drift-early wakes) skips the full panel flash entirely.
+// (hunt wakes, drift-early wakes) skips the full panel flash entirely. 0 = the
+// next dashboard must be drawn (another screen went up, or the panel may hold a
+// half-drawn frame). What the panel shows is g_panel, not this.
 RTC_DATA_ATTR static uint32_t g_lastDrawSig = 0;
 // Local day ordinal of the last 4-cycle deghost clear; ordinary refreshes use
 // the quick 2-cycle clear and the full deghost runs on the first paint of a day.
@@ -109,6 +112,24 @@ RTC_DATA_ATTR static uint32_t g_rateFail = 0;
 // nacisniecie na ekranie powitalnym przemalowywalo ten sam ekran, bez portalu.
 RTC_DATA_ATTR static uint32_t g_autoPortalOpens = 0;
 static const uint32_t kMaxAutoPortalOpens = 4;
+
+enum class FailKind : uint8_t { None = 0, NoWifi, Fetch, RateLimited };
+enum class Panel : uint8_t { Other = 0, Dashboard, NoWifi, FetchError, RateLimited };
+
+// Earliest epoch for the next UNATTENDED network attempt, recorded by every
+// failed one (its backoff, or the server's Retry-After); 0 = none, cleared by a
+// success. It keeps the retry policy apart from the repaint schedule: a wake
+// inside the hold -- the next hour turn, the deadman's follow-up -- repaints from
+// the cache without the radio, so TERAZ moves on time while the network is asked
+// no sooner than it should be. See netHoldLeft().
+RTC_DATA_ATTR static uint32_t g_netRetryAt = 0;
+// Kind (FailKind) of the most recent network failure: a wake inside the hold that
+// cannot paint from the cache needs to know which message is due.
+RTC_DATA_ATTR static uint8_t g_failKind = 0;
+// What the panel shows (Panel). The dashboard signature cannot carry this: zeroing
+// it to force a repaint used to make "the panel is unknown" read as "a failure
+// message is already up", which latched whatever screen was there.
+RTC_DATA_ATTR static uint8_t g_panel = 0;
 
 static int bcd2dec(uint8_t b) { return (b >> 4) * 10 + (b & 0x0F); }
 static uint8_t dec2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
@@ -166,11 +187,10 @@ void SleepCycle::rtcWrite(time_t epoch) {
   Wire.endTransmission();
 }
 
-void SleepCycle::sleepFor(uint32_t seconds) {
-  // Wait (bounded) for the button to be released, so a still-pressed button does
-  // not immediately re-trigger the level-sensitive ext0 wake.
-  uint32_t t0 = millis();
-  while (digitalRead(PIN_BTN) == LOW && millis() - t0 < 5000) delay(10);
+// Arms the wake sources, shuts the EPD rail and enters deep sleep; never
+// returns. Shared by sleepFor() and the deadman below, which must not wait for
+// the button.
+static void enterDeepSleep(uint32_t seconds) {
   // Retain the pull-up on the wake pin through deep sleep (RTC domain) so a
   // floating GPIO cannot spuriously wake the board.
   rtc_gpio_pullup_en((gpio_num_t)PIN_BTN);
@@ -178,7 +198,8 @@ void SleepCycle::sleepFor(uint32_t seconds) {
   esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
   // ext0 is LEVEL-triggered: arming it while the pin is still LOW means the wake
   // condition is already satisfied and the board wakes straight back up. If the
-  // release wait above timed out, rely on the timer alone for this sleep.
+  // release wait in sleepFor() timed out (or the deadman fired with the button
+  // down), rely on the timer alone for this sleep.
   if (digitalRead(PIN_BTN) != LOW) {
     esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN, 0);  // button (active low) wake
   }
@@ -196,6 +217,115 @@ void SleepCycle::sleepFor(uint32_t seconds) {
   epd_poweroff_all();
   epd_poweroff();
   esp_deep_sleep_start();
+}
+
+// --- Deadman: one bound on the awake time of a wake ---------------------------
+// Every blocking step of a cycle has a limit of its own (join, SNTP, TLS
+// handshake, HTTP headers and body, portal), but they live in four libraries and
+// each has been missing or wrong at some point: a TLS peer that went quiet after
+// the headers used to keep this board awake, radio on, for over two hours. This
+// timer is the one limit that depends on none of them. It runs in the esp_timer
+// task (CPU0, 8 KB stack), so it fires even while setup() is stuck in a library
+// loop on CPU1. What it does depends on the phase the cycle was in:
+//  - Network: counted and put on hold exactly like a failed attempt (a Wi-Fi
+//    failure if it never associated, a fetch failure otherwise), then a 2 s
+//    sleep; the follow-up wake falls inside the hold and shows the outcome
+//    without the radio (cache paint or message) -- painting from here would race
+//    the main task for the panel.
+//  - Offline (no radio; boot, screens, cache paints): the panel itself must be
+//    what hangs, so retrying soon would loop. Sleep to the next hour turn.
+// The panel's recorded state is dropped only when a refresh was actually cut;
+// otherwise it still holds what g_panel / g_lastDrawSig say, and forgetting that
+// would cost a needless full refresh (or delay retiring a past-hour dashboard).
+//  - Ota: postpone the check like a failed one (else the next wake would start
+//    the same download over) and come straight back for a normal cycle.
+//  - Portal: nothing to count; the next wake decides afresh.
+enum class Phase : uint8_t { Offline, Network, Ota, Portal };
+static esp_timer_handle_t s_deadman = nullptr;
+static volatile Phase s_phase = Phase::Offline;
+static bool s_deadmanDeferred = false;
+
+static uint32_t budgetSec(Phase p) {
+  switch (p) {
+    case Phase::Network: return 6u * 60u;    // worst real cycle ~4 min: 3 slow fetch attempts
+    case Phase::Ota:     return 15u * 60u;   // manifest + a ~1.4 MB image on a slow link
+    case Phase::Portal:  return 60u * 60u;   // 10 min idle timeout, renewed by every page load
+    default:             return 2u * 60u;    // radio-free work takes seconds
+  }
+}
+
+static void onDeadman(void*) {
+  // First, before the panel check below: a USB-CDC write can take milliseconds.
+  log_e("deadman: phase %d exceeded its budget", (int)s_phase);
+  // Never cut a panel refresh in half. The EPD control register is shared with
+  // the draw running on CPU1, and a torn final push could leave the panel rail
+  // on through the sleep. A refresh takes seconds: give it 30 s once, then act
+  // anyway -- a refresh still running by then is wedged, not drawing.
+  if (EpdRenderer::presenting() && !s_deadmanDeferred) {
+    s_deadmanDeferred = true;
+    esp_timer_start_once(s_deadman, 30ull * 1000000ULL);
+    return;
+  }
+  const bool refreshCut = EpdRenderer::presenting();
+  const time_t now = time(nullptr);
+  uint32_t sleepSec = 2;
+  switch (s_phase) {
+    case Phase::Network: {
+      // status() reads a cached field: safe from this task.
+      const bool associated = WiFi.status() == WL_CONNECTED;
+      const uint32_t n = associated ? ++g_consecFail : ++g_wifiFail;
+      g_failKind = (uint8_t)(associated ? FailKind::Fetch : FailKind::NoWifi);
+      g_netRetryAt = (uint32_t)now + backoffSeconds(n);
+      // The 2 s follow-up only works through the hold gate, which needs a clock.
+      // Without one (a hang in the join or the NTP wait on a board whose RTC is
+      // invalid) it would retry at once: back off instead.
+      if (now < kTimeValid) sleepSec = backoffSeconds(n);
+      break;
+    }
+    case Phase::Offline:
+      sleepSec = secondsUntilNextWake(now, true);
+      break;
+    case Phase::Ota:
+      g_lastOtaCheck = (uint32_t)now - 20u * 3600u;   // retry in ~4 h
+#ifdef PSTRYK_OTA_BOOTSTRAP
+      sleepSec = 60;   // the installer forces the install on every wake: its own retry pace
+#endif
+      break;
+    case Phase::Portal:
+      break;
+  }
+  if (refreshCut) {                 // the panel may hold a half-drawn frame
+    g_lastDrawSig = 0;
+    g_panel = (uint8_t)Panel::Other;
+  }
+  enterDeepSleep(sleepSec);
+}
+
+// (Re)starts the budget for what the cycle does next.
+static void armDeadman(Phase phase) {
+  if (!s_deadman) {
+    esp_timer_create_args_t args = {};
+    args.callback = &onDeadman;
+    args.name = "deadman";
+    if (esp_timer_create(&args, &s_deadman) != ESP_OK) {
+      s_deadman = nullptr;
+      return;
+    }
+  }
+  esp_timer_stop(s_deadman);   // ESP_ERR_INVALID_STATE when not running: fine
+  s_phase = phase;             // only while stopped: the callback reads it
+  s_deadmanDeferred = false;   // a new budget gets its own refresh grace
+  esp_timer_start_once(s_deadman, (uint64_t)budgetSec(phase) * 1000000ULL);
+}
+
+void SleepCycle::sleepFor(uint32_t seconds) {
+  // The cycle is over: the deadman must not fire during the release wait.
+  if (s_deadman) esp_timer_stop(s_deadman);
+  // Wait (bounded) for the button to be released, so a still-pressed button does
+  // not immediately re-trigger the level-sensitive ext0 wake.
+  uint32_t t0 = millis();
+  while (digitalRead(PIN_BTN) == LOW && millis() - t0 < 5000) delay(10);
+  enterDeepSleep(seconds);
 }
 
 static void cacheStore(const PriceData& data) {
@@ -253,7 +383,10 @@ static uint32_t viewSignature(const PriceView& v, const EpdStatus& st) {
   for (const Bar& b : v.tomorrow) mixBar(b);
   mix((uint32_t)v.liveIndex);
   mix((uint32_t)(v.hasTomorrow ? 1 : 0));
-  mix((uint32_t)st.batteryPct);
+  // Battery in 5 % steps: the ADC wobbles by a percent between wakes, and with
+  // repaints now also on hold wakes every wobble would cost a full-panel flash.
+  // The exact value is still drawn whenever anything else changes.
+  mix(st.batteryPct < 0 ? 0xFFFFFFFFu : (uint32_t)st.batteryPct / 5u);
   mix((uint32_t)(st.batteryLow ? 1 : 0));
   mix((uint32_t)(st.stale ? 1 : 0));   // without this the marker could never appear
   return h == 0 ? 1u : h;   // 0 is reserved for "invalid -> must draw"
@@ -273,6 +406,7 @@ static uint32_t viewSignature(const PriceView& v, const EpdStatus& st) {
 // the tiered deghost landed, present() cleared unconditionally and this was free.
 static void msgScreen(EpdRenderer& g, const char* line1, const char* line2) {
   g_lastDrawSig = 0;
+  g_panel = (uint8_t)Panel::Other;   // showFailureIfDue names its own message after this
   g_authShown = 0;
   g_lastDeepCleanDay = 0;      // next dashboard paint deghosts too
   g.requestDeepClean();
@@ -285,6 +419,7 @@ static void msgScreen(EpdRenderer& g, const char* line1, const char* line2) {
 // margines bledu ze wszystkiego, co rysujemy.
 static void setupScreen(EpdRenderer& g, int batteryPct) {
   g_lastDrawSig = 0;
+  g_panel = (uint8_t)Panel::Other;
   g_authShown = 0;
   g_lastDeepCleanDay = 0;
   g.requestDeepClean();
@@ -302,10 +437,159 @@ static void setupScreen(EpdRenderer& g, int batteryPct) {
 // co rysujemy, zostawia ducha pod nastepnym pelnym przemalowaniem.
 static void welcomeScreen(EpdRenderer& g, int batteryPct) {
   g_lastDrawSig = 0;
+  g_panel = (uint8_t)Panel::Other;
   g_authShown = 0;
   g_lastDeepCleanDay = 0;
   g.requestDeepClean();
   drawWelcomeScreen(g, batteryPct);
+}
+
+// Radio off before a panel refresh: the refresh takes seconds and needs nothing
+// from it.
+static void radioOff() {
+  WiFi.disconnect(true, false);
+  WiFi.mode(WIFI_OFF);
+}
+
+// Paints `view` -- built for `viewNow` -- unless the panel already shows exactly
+// this content (hunt wakes, drift-early wakes, a retry with unchanged data).
+static void paintDashboard(EpdRenderer& g, const PriceView& view, EpdStatus st, time_t viewNow) {
+  struct tm lt; localtime_r(&viewNow, &lt);
+  char clk[6]; std::snprintf(clk, sizeof(clk), "%02d:%02d", lt.tm_hour, lt.tm_min);
+  st.clockHHMM = clk;                       // outlives the drawDashboard call below
+  uint32_t sig = viewSignature(view, st);
+  if (sig == g_lastDrawSig) return;         // skip the flash when nothing changed
+  if (localDayOrdinal(viewNow) != g_lastDeepCleanDay) {
+    g.requestDeepClean();                   // first paint of the day: full deghost
+    g_lastDeepCleanDay = localDayOrdinal(viewNow);
+  }
+  drawDashboard(g, view, st);
+  g_lastDrawSig = sig;
+  g_panel = (uint8_t)Panel::Dashboard;
+  g_authShown = 0;                          // the key hint (if any) is off screen now
+}
+
+// Paints the current hour from `data` and returns the sleep until the next
+// refresh -- both from the clock as it stands when the panel is done. The view
+// used to be built from the timestamp taken BEFORE the OTA check and the fetch,
+// and the sleep computed from the one taken AFTER the paint: a cycle that
+// crossed HH:00 (a wake a few seconds early -- the deep-sleep timer runs on the
+// internal RC -- a button press at HH:59:5x, a backoff retry) painted the hour
+// that had just ended as TERAZ and then slept through the whole new one. Now
+// the view is built once the data is in hand, and if the hour still turns
+// during the seconds-long refresh, the panel catches up before sleeping.
+// `plainHourTurn` drops the tomorrow-hunt's 30-min cadence from the result: that
+// is a network cadence, meaningless while the network is on hold.
+static uint32_t presentDashboard(EpdRenderer& g, const PriceData& data, const EpdStatus& st,
+                                 bool plainHourTurn = false) {
+  time_t t = time(nullptr);
+  PriceView view = buildView(data, t);
+  paintDashboard(g, view, st, t);
+  time_t after = time(nullptr);
+  if (hourChanged(t, after)) {
+    view = buildView(data, after);
+    paintDashboard(g, view, st, after);
+    after = time(nullptr);
+  }
+  return secondsUntilNextWake(after, plainHourTurn || view.hasTomorrow);
+}
+
+// Cached prices are marked stale ("* nieakt.") once a failure kind is confirmed,
+// not on a single blip: that would cost two full refreshes (marker on, then off
+// at the retry a minute later) to say nothing -- day-ahead prices in the cache
+// are final either way. The criterion is a run of failures, not elapsed time:
+// working from the cache for many hours is the intended behaviour once tomorrow's
+// frames are in.
+static bool failureConfirmed() {
+  return g_consecFail >= kConfirmedFailures || g_wifiFail >= kConfirmedFailures ||
+         g_rateFail >= kConfirmedFailures;
+}
+
+static Panel panelFor(FailKind k) {
+  switch (k) {
+    case FailKind::NoWifi:      return Panel::NoWifi;
+    case FailKind::Fetch:       return Panel::FetchError;
+    case FailKind::RateLimited: return Panel::RateLimited;
+    default:                    return Panel::Other;
+  }
+}
+
+// The message for the most recent network failure, when failureMessageDue says
+// it is due for what the panel shows. Only called where the cache cannot cover
+// the hour.
+static void showFailureIfDue(EpdRenderer& g) {
+  const FailKind kind = (FailKind)g_failKind;
+  uint32_t n = 0;
+  const char* line1 = nullptr;
+  const char* line2 = nullptr;
+  char clk[6];
+  switch (kind) {
+    case FailKind::NoWifi:
+      n = g_wifiFail; line1 = "Brak Wi-Fi"; line2 = "Sprobuje ponownie";
+      break;
+    case FailKind::Fetch: {
+      n = g_consecFail; line1 = "Blad pobierania";
+      time_t t = time(nullptr);
+      struct tm lt; localtime_r(&t, &lt);
+      std::snprintf(clk, sizeof(clk), "%02d:%02d", lt.tm_hour, lt.tm_min);
+      line2 = clk;
+      break;
+    }
+    case FailKind::RateLimited:
+      n = g_rateFail; line1 = "Limit zapytan"; line2 = "Sprobuje pozniej";
+      break;
+    default:
+      return;
+  }
+  const Panel mine = panelFor(kind);
+  const Panel up = (Panel)g_panel;
+  const PanelShows shows = up == mine               ? PanelShows::ThisFailure
+                           : up == Panel::Dashboard ? PanelShows::Dashboard
+                                                    : PanelShows::Other;
+  if (!failureMessageDue(n, /*cacheCoversNow=*/false, shows)) return;
+  msgScreen(g, line1, line2);
+  g_panel = (uint8_t)mine;
+}
+
+// Shows the best the board has without the network and returns the sleep. The
+// e-paper keeps its image at zero power, and the RTC cache usually still holds
+// this hour's price: most network wakes are housekeeping (the afternoon tomorrow-
+// hunt, the daily OTA or NTP check, the DST window), not cache misses. Failed
+// ones used to only count and, at the third failure, swap the dashboard for an
+// error screen that then stayed for the rest of the outage -- "Brak Wi-Fi" from
+// ~12:04 into the evening, over cached hours the board could have shown. Now the
+// cache keeps TERAZ current (stale-marked once the outage is confirmed) and the
+// message is for when the cache cannot cover the hour. `holdSec` is what is left
+// of the network hold; while the network is wanted, the sleep ends with it so
+// the retry runs on time -- otherwise the next hour turn is the next thing to do.
+static uint32_t presentOffline(EpdRenderer& g, EpdStatus st, uint32_t holdSec, bool wantNet) {
+  const bool holding = wantNet && holdSec > 0;
+  // Just past the end of the hold, with the hour-turn wake's 5 s guard: the
+  // deep-sleep timer runs on the internal RC and may fire a little early, and a
+  // wake a second before the retry time would only boot to sleep again.
+  const uint32_t untilRetry = holdSec + 5u;
+  if (cacheView(time(nullptr)).coversNow) {
+    PriceData cached;
+    cacheLoad(cached);
+    st.stale = failureConfirmed();
+    uint32_t toHour = presentDashboard(g, cached, st, /*plainHourTurn=*/holding);
+    return (holding && untilRetry < toHour) ? untilRetry : toHour;
+  }
+  showFailureIfDue(g);
+  // Without the cache there is nothing to repaint before the retry is due.
+  return holdSec > 0 ? untilRetry : backoffSeconds(1);
+}
+
+// A failed network attempt: record it, put the network on hold until the retry
+// (backoff or Retry-After), and show the best the board has without it. The
+// hold is what makes the hour-turn wake that presentOffline may schedule
+// radio-free, instead of an early retry against the server's Retry-After.
+static uint32_t afterNetworkFailure(EpdRenderer& g, FailKind kind, uint32_t retrySec,
+                                    const EpdStatus& st) {
+  radioOff();
+  g_failKind = (uint8_t)kind;
+  g_netRetryAt = (uint32_t)time(nullptr) + retrySec;
+  return presentOffline(g, st, retrySec, /*wantNet=*/true);
 }
 
 #ifdef PSTRYK_OTA_BOOTSTRAP
@@ -314,6 +598,7 @@ static void welcomeScreen(EpdRenderer& g, int batteryPct) {
 // OtaUpdater::runOnce(force=true) reboots on success; on failure we show a message
 // and retry on the next wake.
 void SleepCycle::runBootstrap() {
+  armDeadman(Phase::Portal);   // a human may be filling in the portal
   settings_.load();
   bool needPortal = !settings_.isComplete();
   if (needPortal) {
@@ -334,6 +619,7 @@ void SleepCycle::runBootstrap() {
     return;
   }
   if (needPortal) msgScreen(gfx_, "Instalacja", "Pobieranie najnowszej wersji...");
+  armDeadman(Phase::Ota);
   OtaUpdater().runOnce(/*force=*/true);  // reboots into the installed release on success
   msgScreen(gfx_, "Blad instalacji", "Sprobuje ponownie");  // only reached on failure
   sleepFor(60);
@@ -343,6 +629,7 @@ void SleepCycle::runBootstrap() {
 void SleepCycle::setup() {
   Serial.begin(115200);
   delay(100);
+  armDeadman(Phase::Offline);      // see "Deadman"; re-armed for each kind of step
   pinMode(PIN_BTN, INPUT_PULLUP);
   timeServiceBegin();                 // install Warsaw TZ for mktime/localtime
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -419,9 +706,11 @@ void SleepCycle::setup() {
       return;
     }
     if (!human) ++g_autoPortalOpens;   // przed portalem: brownout w trakcie tez sie liczy
+    armDeadman(Phase::Portal);      // portal czeka na czlowieka
     setupScreen(gfx_, batPct);   // batPct z odczytu w kroku 1 (przed Wi-Fi)
     WiFiProvisioner prov;
     prov.ensureConnected(settings_, /*forcePortal=*/true);
+    armDeadman(Phase::Offline);
     // Gate on the CONFIG, not on the connection. A portal that timed out (or was
     // submitted without the API key) saves nothing, and the old unconditional
     // sleepFor(2) then reopened it forever: ~99 % duty in SoftAP (~100 mA), a
@@ -431,6 +720,7 @@ void SleepCycle::setup() {
       g_cache.count = 0;              // fresh config -> force a fetch next cycle
       g_authShown = 0; g_consecFail = 0; g_wifiFail = 0;
       g_clockFail = 0; g_rateFail = 0;
+      g_netRetryAt = 0; g_failKind = 0;   // a new network: no hold carried over
       g_autoPortalOpens = 0;          // skonfigurowane -> pelna pula na przyszlosc
       sleepFor(2);                    // wake immediately to run a normal cycle
     } else {
@@ -456,52 +746,39 @@ void SleepCycle::setup() {
   // WiFi.begin() -- the radio phase dominates the energy cost of a wake, and
   // the prices cannot have changed.
   time_t seedNow = time(nullptr);
-  if (seedNow > kTimeValid && g_cache.count > 0) {
-    uint32_t ntpAge = (g_lastNtpSync > 0 && seedNow > (time_t)g_lastNtpSync)
-                          ? (uint32_t)(seedNow - (time_t)g_lastNtpSync)
-                          : 0xFFFFFFFFu;
-    // A due OTA check does not force the radio on a low cell: a ~2 MB download
-    // there risks a brownout mid-flash; the check resumes once charged.
-    bool otaDue = !batLow &&
-                  dueForOtaCheck(g_lastOtaCheck, (uint32_t)seedNow, 24u * 3600u);
-    if (!needsNetwork(seedNow, buttonWake, cacheView(seedNow), ntpAge, otaDue)) {
-      PriceData data;
-      cacheLoad(data);
-      PriceView cachedView = buildView(data, seedNow);
-      if (cachedView.hasData) {
-        struct tm lt; localtime_r(&seedNow, &lt);
-        char clk[6]; std::snprintf(clk, sizeof(clk), "%02d:%02d", lt.tm_hour, lt.tm_min);
-        st.clockHHMM = clk;
-        st.wifiOk = true;             // radio deliberately off, not a failure
-        // Painting from the cache broke the old invariant "a dashboard on screen
-        // means a fetch confirmed this cycle", which is why EpdStatus::stale
-        // existed but was never assigned. The criterion is a confirmed run of
-        // failures, NOT elapsed time: working from cache for many hours is the
-        // intended behaviour once tomorrow's frames are in.
-        st.stale = (g_consecFail > 0 || g_wifiFail > 0 || g_rateFail > 0);
-        uint32_t sig = viewSignature(cachedView, st);
-        if (sig != g_lastDrawSig) {   // skip the flash when nothing changed
-          if (localDayOrdinal(seedNow) != g_lastDeepCleanDay) {
-            gfx_.requestDeepClean();  // first paint of the day: full deghost
-            g_lastDeepCleanDay = localDayOrdinal(seedNow);
-          }
-          drawDashboard(gfx_, cachedView, st);
-          g_lastDrawSig = sig;
-          g_authShown = 0;            // the key hint (if any) is off screen now
-        }
-        sleepFor(secondsUntilNextWake(time(nullptr), cachedView.hasTomorrow));
-        return;
-      }
+  if (seedNow > kTimeValid) {
+    // A failed attempt put the unattended network on hold (its backoff, or the
+    // server's Retry-After): inside the hold this wake stays radio-free even when
+    // the gate wants the network, and repaints what it has. A retry time over an
+    // hour away can only mean the clock stepped back after it was recorded (no
+    // retry this firmware schedules is longer): bring it back within reach.
+    if (g_netRetryAt > (uint32_t)seedNow + 3600u) g_netRetryAt = (uint32_t)seedNow + 3600u;
+    uint32_t hold = netHoldLeft(g_netRetryAt, seedNow, buttonWake);
+    bool wantNet = true;
+    if (g_cache.count > 0) {
+      uint32_t ntpAge = (g_lastNtpSync > 0 && seedNow > (time_t)g_lastNtpSync)
+                            ? (uint32_t)(seedNow - (time_t)g_lastNtpSync)
+                            : 0xFFFFFFFFu;
+      // A due OTA check does not force the radio on a low cell: a ~2 MB download
+      // there risks a brownout mid-flash; the check resumes once charged.
+      bool otaDue = !batLow &&
+                    dueForOtaCheck(g_lastOtaCheck, (uint32_t)seedNow, 24u * 3600u);
+      wantNet = needsNetwork(seedNow, buttonWake, cacheView(seedNow), ntpAge, otaDue);
+    }
+    if (!wantNet || hold > 0) {
+      st.wifiOk = true;               // radio deliberately off, not a failure
+      sleepFor(presentOffline(gfx_, st, hold, wantNet));
+      return;
     }
   }
 
   // 4) Wi-Fi
+  armDeadman(Phase::Network);
   WiFiProvisioner prov;
   bool wifi = prov.ensureConnected(settings_, /*forcePortal=*/false);
   st.wifiOk = wifi;
   if (wifi) g_wifiFail = 0;
 
-  PriceView view;
   if (wifi) {
     // 5) NTP -> system clock + PCF8563. NTP is AUTHORITATIVE on a connected cycle.
     // The old gate `time(nullptr) < kTimeValid` never waited here, because step 3
@@ -529,8 +806,7 @@ void SleepCycle::setup() {
     // g_clockFail -- on the same backoff curve as its neighbours, and it must
     // paint only once. Radio off first: the panel refresh below takes seconds.
     g_clockFail++;
-    WiFi.disconnect(true, false);
-    WiFi.mode(WIFI_OFF);
+    radioOff();
     if (g_clockFail == 1) msgScreen(gfx_, "Synchronizacja czasu...", "");
     sleepFor(backoffSeconds(g_clockFail));
     return;
@@ -544,7 +820,9 @@ void SleepCycle::setup() {
   // remotely on exactly the devices that needed the fix. Still skipped on a low
   // cell: a ~2 MB download there risks a brownout mid-flash.
   if (wifi && !batLow && dueForOtaCheck(g_lastOtaCheck, (uint32_t)now, 24u * 3600u)) {
+    armDeadman(Phase::Ota);                // an image download can take minutes
     OtaResult ota = OtaUpdater().runOnce();   // reboots into the new image on success
+    armDeadman(Phase::Network);
     // A failed check must not burn the whole day, nor retry on every wake (each
     // attempt is a full TLS session): come back in ~4 h instead of 24 h.
     g_lastOtaCheck = (ota == OtaResult::NoUpdate) ? (uint32_t)now
@@ -552,7 +830,6 @@ void SleepCycle::setup() {
   }
 
   uint32_t nextWake = 3600;
-  bool okCycle = false;
   if (wifi) {
     // 6) fetch
     Window w = computeWindow(now);
@@ -572,24 +849,11 @@ void SleepCycle::setup() {
       g_consecFail = 0;
       g_rateFail = 0;
       g_authShown = 0;
-      okCycle = true;
+      g_netRetryAt = 0;                         // the outage (if any) is over
+      g_failKind = 0;
       cacheStore(data);                         // feed the radio-free wakes
-      view = buildView(data, now);
-      // Radio off for the slow (~2-2.5 s) e-paper refresh; nothing below needs it.
-      WiFi.disconnect(true, false);
-      WiFi.mode(WIFI_OFF);
-      struct tm lt; localtime_r(&now, &lt);
-      char clk[6]; std::snprintf(clk, sizeof(clk), "%02d:%02d", lt.tm_hour, lt.tm_min);
-      st.clockHHMM = clk;                       // local buffer lives until setup() returns
-      uint32_t sig = viewSignature(view, st);
-      if (sig != g_lastDrawSig) {               // 7) paint (skip a no-op reflash)
-        if (localDayOrdinal(now) != g_lastDeepCleanDay) {
-          gfx_.requestDeepClean();              // first paint of the day: full deghost
-          g_lastDeepCleanDay = localDayOrdinal(now);
-        }
-        drawDashboard(gfx_, view, st);
-        g_lastDrawSig = sig;
-      }
+      radioOff();                               // for the slow (~2-2.5 s) e-paper refresh
+      nextWake = presentDashboard(gfx_, data, st);   // 7) paint (skips a no-op reflash)
     } else if (res.status == FetchStatus::AuthError) {
       // The key can only change via the captive portal (button-held), so hourly
       // re-checks are pointless; paint the hint once and check ~4x/day.
@@ -599,46 +863,32 @@ void SleepCycle::setup() {
       }
       nextWake = 4u * 3600u;
     } else if (res.status == FetchStatus::RateLimited) {
-      // Same policy as the transient branch below: the e-paper holds its last good
-      // image at zero power, so a single 429 must not replace it with an error
-      // screen. That was the one failure path that wiped the dashboard on the FIRST
-      // occurrence -- reachable just by pressing refresh a few times in an hour,
-      // while the cache still held valid frames for the current hour.
+      // Same policy as the transient branch below: a 429 must not replace the
+      // dashboard -- that was reachable just by pressing refresh a few times in
+      // an hour. The hold makes Retry-After binding for the unattended retry.
       g_rateFail++;
-      if (g_rateFail == 3) msgScreen(gfx_, "Limit zapytan", "Sprobuje pozniej");
-      nextWake = res.retryAfterSec > 0 ? (uint32_t)res.retryAfterSec
-                                       : backoffSeconds(g_rateFail);
+      uint32_t wait = res.retryAfterSec > 0 ? (uint32_t)res.retryAfterSec
+                                            : backoffSeconds(g_rateFail);
+      nextWake = afterNetworkFailure(gfx_, FailKind::RateLimited, wait, st);
     } else {
-      // Transient network/parse error AFTER the in-cycle retries. The e-paper holds its
-      // last good image at zero power, so don't wipe it for a brief blip -- surface the
-      // error once, when the outage is confirmed (3rd straight failure), and double the
-      // retry interval so a sustained outage costs ~1 wake/h instead of 1/min.
+      // Transient network/parse error AFTER the in-cycle retries. Double the retry
+      // interval so a sustained outage costs ~1 wake/h instead of 1/min.
       g_consecFail++;
       // Repeated failures right after a "successful" join are the classic
       // symptom of a stale fast-connect lease -- drop it so the next wake does
       // a full DHCP join instead of looping on a dead static config.
       if (g_consecFail >= 2) WiFiProvisioner::forgetAp();
-      if (g_consecFail == 3) {
-        struct tm lt; localtime_r(&now, &lt);
-        char l2[24]; std::snprintf(l2, sizeof(l2), "%02d:%02d", lt.tm_hour, lt.tm_min);
-        msgScreen(gfx_, "Blad pobierania", l2);
-      }
-      nextWake = backoffSeconds(g_consecFail);
+      nextWake = afterNetworkFailure(gfx_, FailKind::Fetch, backoffSeconds(g_consecFail), st);
     }
   } else {
-    // Same shape as the fetch-failure path: keep the last good dashboard through a
-    // brief router blip, only admit "no Wi-Fi" on the 3rd straight failed wake.
+    // Same shape as the fetch-failure path, on the association instead.
     g_wifiFail++;
-    if (g_wifiFail == 3) msgScreen(gfx_, "Brak Wi-Fi", "Sprobuje ponownie");
-    nextWake = backoffSeconds(g_wifiFail);
+    nextWake = afterNetworkFailure(gfx_, FailKind::NoWifi, backoffSeconds(g_wifiFail), st);
   }
 
-  // 8) sleep. Anchor the wake math to the CURRENT clock on good cycles: the
-  // fetch, an OTA check and the paint together take seconds, and computing the
-  // interval from the pre-fetch timestamp wakes the board correspondingly late
-  // relative to the next hour turn.
+  // 8) sleep (presentDashboard already anchored the good-cycle interval to the
+  // clock as it stood after the paint).
   WiFi.disconnect(true, false);
-  if (okCycle) nextWake = secondsUntilNextWake(time(nullptr), view.hasTomorrow);
   sleepFor(nextWake);
 }
 

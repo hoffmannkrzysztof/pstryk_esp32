@@ -49,4 +49,20 @@ bool needsNetwork(time_t now, bool buttonWake, RtcCacheView cache,
   return false;
 }
 
+bool hourChanged(time_t earlier, time_t later) {
+  return earlier / 3600 != later / 3600;
+}
+
+bool failureMessageDue(uint32_t n, bool cacheCoversNow, PanelShows panel) {
+  if (n == 0 || cacheCoversNow || panel == PanelShows::ThisFailure) return false;
+  if (panel == PanelShows::Dashboard) return true;   // a past hour shown as TERAZ
+  return n >= kConfirmedFailures;
+}
+
+uint32_t netHoldLeft(uint32_t retryAtEpoch, time_t now, bool buttonWake) {
+  if (buttonWake || retryAtEpoch == 0 || now >= (time_t)retryAtEpoch) return 0;
+  uint32_t left = (uint32_t)((time_t)retryAtEpoch - now);
+  return left > 3600u ? 3600u : left;
+}
+
 }  // namespace pstryk

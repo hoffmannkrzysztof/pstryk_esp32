@@ -90,8 +90,13 @@ int EpdRenderer::textHeight(int size) {
   return fontForSize(size)->advance_y;
 }
 
+static volatile bool s_presenting = false;
+
+bool EpdRenderer::presenting() { return s_presenting; }
+
 void EpdRenderer::present() {
   Rect_t area = epd_full_screen();
+  s_presenting = true;
   epd_poweron();
   if (deepClean_) {
     epd_clear();                          // vendor deghost: 4 black/white cycles
@@ -104,6 +109,7 @@ void EpdRenderer::present() {
   }
   epd_draw_grayscale_image(area, fb_);
   epd_poweroff();
+  s_presenting = false;
 }
 
 }  // namespace pstryk

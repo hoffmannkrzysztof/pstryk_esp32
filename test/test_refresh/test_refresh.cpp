@@ -154,6 +154,94 @@ void test_dst_switch_window_forces_network() {
   TEST_ASSERT_TRUE(needsNetwork(now, false, goodCache(), 3600u, false));
 }
 
+// --- hourChanged: has the panel's hour gone by while the cycle was busy? ---
+
+void test_hour_changed_across_the_turn() {
+  TEST_ASSERT_TRUE(hourChanged(parseIso8601Utc("2026-06-02T07:59:59Z"),
+                               parseIso8601Utc("2026-06-02T08:00:00Z")));
+}
+
+void test_hour_unchanged_within_the_hour() {
+  TEST_ASSERT_FALSE(hourChanged(parseIso8601Utc("2026-06-02T08:00:00Z"),
+                                parseIso8601Utc("2026-06-02T08:59:59Z")));
+}
+
+// The autumn switch repeats 02:00 local with a different price frame: a
+// local-hour comparison sees "2 == 2" and misses the change.
+void test_hour_changed_on_the_repeated_fall_back_hour() {
+  time_t firstTwo = parseIso8601Utc("2026-10-25T00:59:58Z");   // 02:59:58 CEST
+  time_t secondTwo = parseIso8601Utc("2026-10-25T01:00:01Z");  // 02:00:01 CET
+  TEST_ASSERT_EQUAL_INT(localHour(firstTwo), localHour(secondTwo));
+  TEST_ASSERT_TRUE(hourChanged(firstTwo, secondTwo));
+}
+
+// --- failureMessageDue: when a failed network wake may replace the panel ---
+
+// Over any screen but a dashboard (setup screen, park screen, unknown after a
+// reset) the message waits until the outage is confirmed: a single blip must
+// not flash an error.
+void test_failure_message_waits_for_confirmation() {
+  TEST_ASSERT_FALSE(failureMessageDue(1, false, PanelShows::Other));
+  TEST_ASSERT_FALSE(failureMessageDue(2, false, PanelShows::Other));
+  TEST_ASSERT_TRUE(failureMessageDue(kConfirmedFailures, false, PanelShows::Other));
+}
+
+// The latch that used to fire only at exactly n == 3: once another screen
+// (low battery, a reset) has replaced the message, it must come back.
+void test_failure_message_comes_back_after_another_screen() {
+  TEST_ASSERT_TRUE(failureMessageDue(9, false, PanelShows::Other));
+}
+
+void test_failure_message_is_not_repainted_while_up() {
+  TEST_ASSERT_FALSE(failureMessageDue(9, false, PanelShows::ThisFailure));
+}
+
+void test_no_failure_message_while_the_cache_covers_the_hour() {
+  TEST_ASSERT_FALSE(failureMessageDue(1, true, PanelShows::Dashboard));
+  TEST_ASSERT_FALSE(failureMessageDue(12, true, PanelShows::Other));
+}
+
+// A dashboard on the panel while the cache no longer covers the hour presents
+// a past hour as TERAZ: that is wrong, not merely stale, so it goes at once.
+void test_dashboard_of_a_past_hour_is_retired_at_once() {
+  TEST_ASSERT_TRUE(failureMessageDue(1, false, PanelShows::Dashboard));
+}
+
+void test_no_failure_message_without_a_failure() {
+  TEST_ASSERT_FALSE(failureMessageDue(0, false, PanelShows::Dashboard));
+  TEST_ASSERT_FALSE(failureMessageDue(0, false, PanelShows::Other));
+}
+
+// --- netHoldLeft: no unattended network attempt before the retry time ---
+
+void test_no_hold_without_a_recorded_failure() {
+  time_t now = parseIso8601Utc("2026-06-02T10:30:00Z");
+  TEST_ASSERT_EQUAL_UINT32(0u, netHoldLeft(0, now, false));
+}
+
+void test_hold_counts_down_to_the_retry_time() {
+  time_t now = parseIso8601Utc("2026-06-02T10:30:00Z");
+  TEST_ASSERT_EQUAL_UINT32(600u, netHoldLeft((uint32_t)now + 600u, now, false));
+}
+
+void test_hold_is_over_once_the_retry_time_passed() {
+  time_t now = parseIso8601Utc("2026-06-02T10:30:00Z");
+  TEST_ASSERT_EQUAL_UINT32(0u, netHoldLeft((uint32_t)now, now, false));
+  TEST_ASSERT_EQUAL_UINT32(0u, netHoldLeft((uint32_t)now - 5u, now, false));
+}
+
+void test_button_wake_ignores_the_hold() {
+  time_t now = parseIso8601Utc("2026-06-02T10:30:00Z");
+  TEST_ASSERT_EQUAL_UINT32(0u, netHoldLeft((uint32_t)now + 600u, now, true));
+}
+
+// Every retry this firmware schedules is <= 1 h; a longer hold can only mean
+// the clock stepped back after it was recorded.
+void test_hold_is_capped_at_an_hour() {
+  time_t now = parseIso8601Utc("2026-06-02T10:30:00Z");
+  TEST_ASSERT_EQUAL_UINT32(3600u, netHoldLeft((uint32_t)now + 7200u, now, false));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_window_is_local_midnight_plus_48h);
@@ -181,5 +269,19 @@ int main(int, char**) {
   RUN_TEST(test_afternoon_without_tomorrow_hunts_online);
   RUN_TEST(test_afternoon_with_tomorrow_stays_radio_free);
   RUN_TEST(test_dst_switch_window_forces_network);
+  RUN_TEST(test_hour_changed_across_the_turn);
+  RUN_TEST(test_hour_unchanged_within_the_hour);
+  RUN_TEST(test_hour_changed_on_the_repeated_fall_back_hour);
+  RUN_TEST(test_failure_message_waits_for_confirmation);
+  RUN_TEST(test_failure_message_comes_back_after_another_screen);
+  RUN_TEST(test_failure_message_is_not_repainted_while_up);
+  RUN_TEST(test_no_failure_message_while_the_cache_covers_the_hour);
+  RUN_TEST(test_dashboard_of_a_past_hour_is_retired_at_once);
+  RUN_TEST(test_no_failure_message_without_a_failure);
+  RUN_TEST(test_no_hold_without_a_recorded_failure);
+  RUN_TEST(test_hold_counts_down_to_the_retry_time);
+  RUN_TEST(test_hold_is_over_once_the_retry_time_passed);
+  RUN_TEST(test_button_wake_ignores_the_hold);
+  RUN_TEST(test_hold_is_capped_at_an_hour);
   return UNITY_END();
 }

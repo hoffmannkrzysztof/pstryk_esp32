@@ -31,6 +31,11 @@ class EpdRenderer : public IRenderer {
   // this ~daily -- every refresh at 4 cycles was ~32 needless panel passes/day.
   void requestDeepClean() { deepClean_ = true; }
 
+  // True while present() has the panel powered and is driving it. Read from
+  // another task (SleepCycle's deadman), which must not shut the EPD down under
+  // a refresh in progress.
+  static bool presenting();
+
  private:
   uint8_t* fb_ = nullptr;  // EPD_WIDTH*EPD_HEIGHT/2 bytes in PSRAM
   bool     deepClean_ = false;

@@ -39,4 +39,39 @@ struct RtcCacheView {
 bool needsNetwork(time_t now, bool buttonWake, RtcCacheView cache,
                   uint32_t ntpAgeSec, bool otaDue);
 
+// True when `later` lies in a different clock hour than `earlier`. The epoch
+// hour is the frame index (frames are aligned to UTC hours and Poland's offsets
+// are whole hours), and unlike a local-hour comparison it also tells the
+// repeated 02:00 of the autumn switch from the first one.
+bool hourChanged(time_t earlier, time_t later);
+
+// Consecutive failures of one kind that make an outage "confirmed": from here on
+// the e-paper marks cached prices stale and may show the failure message. A
+// single blip (a missed scan, one timed-out request) stays invisible.
+static const uint32_t kConfirmedFailures = 3;
+
+// What the e-paper shows, relative to one failure kind.
+enum class PanelShows : uint8_t {
+  Other,         // another message, the setup/welcome screen, or unknown (reset)
+  Dashboard,     // prices
+  ThisFailure,   // the message for exactly this failure kind
+};
+
+// After a failed network attempt -- the n-th of its kind in a row -- should the
+// e-paper switch to the failure message? Never while the RTC cache still covers
+// the current hour: a stale-marked dashboard from the cache is the better screen.
+// A dashboard up while the cache does NOT cover the hour presents a past hour
+// as TERAZ, so it goes at the first failure. Over any other screen the message
+// waits for a confirmed outage, and it is never repainted while already up.
+bool failureMessageDue(uint32_t n, bool cacheCoversNow, PanelShows panel);
+
+// Seconds until the next unattended network attempt is allowed, given the
+// earliest-retry epoch recorded after a failure (0 = none). This is what keeps
+// the retry policy (backoff, Retry-After) separate from the repaint schedule: a
+// wake inside the hold repaints from the cache without the radio. A button
+// press bypasses it -- a human asked for fresh data -- and a hold over an hour
+// (every retry this firmware schedules is <= 1 h) can only mean the clock
+// stepped back after it was set, so it is capped.
+uint32_t netHoldLeft(uint32_t retryAtEpoch, time_t now, bool buttonWake);
+
 }  // namespace pstryk
