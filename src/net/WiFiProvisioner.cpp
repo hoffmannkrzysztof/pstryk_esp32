@@ -109,6 +109,24 @@ bool WiFiProvisioner::ensureConnected(Settings& s, bool forcePortal) {
   wm.setTitle("Pstryk");
   const char* menu[] = {"custom", "wifi"};
   wm.setMenu(menu, 2);
+  // setMenu() hides buttons, not routes: WiFiManager registers every handler it
+  // has on each portal start. Among them POST /u flashes an uploaded image via
+  // Update -- WITHOUT the RSA check, which this firmware installs only inside
+  // OtaUpdater::runOnce() -- and reboots into it, while /erase, /restart,
+  // /exit, /close, /info and /param(save) wipe, reboot, close or describe the
+  // device. Reachable by anyone on the portal AP, and on the Long board (a BOOT
+  // reconfigure keeps the STA associated) by anyone on the home LAN. The
+  // callback runs after the server is created and before the library registers
+  // its own handlers, and WebServer serves the FIRST handler that matches, so
+  // these shadow the library's. The two-argument on() is HTTP_ANY, which covers
+  // the POST upload too; with no upload function the file body is discarded.
+  wm.setWebServerCallback([&wm]() {
+    static const char* const kHidden[] = {R_update, R_updatedone, R_erase, R_restart,
+                                          R_exit,   R_close,      R_info,  R_param,
+                                          R_paramsave};
+    for (const char* uri : kHidden)
+      wm.server->on(uri, [&wm]() { wm.server->send(404, "text/plain", ""); });
+  });
   wm.setCustomMenuHTML(intro.c_str());
   // Bez SSID nie ma czego laczyc, a szablon HTTP_FORM_WIFI jest statyczny:
   // bez zapisanej sieci skrypt w <head> robi z pola sieci pole wymagane. Gdy
