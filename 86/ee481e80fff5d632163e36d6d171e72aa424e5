@@ -1,0 +1,9 @@
+src/net/WiFiProvisioner.cpp
+  ai_agent 112-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "86ee481e80fff5d632163e36d6d171e72aa424e5",
+  "prompts": {}
+}
