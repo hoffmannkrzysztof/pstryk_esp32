@@ -1,0 +1,19 @@
+src/core/RefreshPolicy.cpp
+  ai_agent 52-67
+test/test_refresh/test_refresh.cpp
+  ai_agent 157-244,272-285
+src/render/EpdRenderer.h
+  ai_agent 34-38
+src/core/RefreshPolicy.h
+  ai_agent 42-76
+src/app/SleepCycle.cpp
+  ai_agent 20,54-56,84-86,116-133,190-193,201-202,222-330,386-389,409,422,440,447-594,601,622,632,709,713,723,749-771,776,809,823,825,852-853,855-856,866-868,870-872,874-875,881,884,886,889-890
+src/render/EpdRenderer.cpp
+  ai_agent 93-96,99,112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "0502bcf53c35b4b7d3270127ba90d074ff1b477c",
+  "prompts": {}
+}
